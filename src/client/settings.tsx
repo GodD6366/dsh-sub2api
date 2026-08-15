@@ -601,7 +601,7 @@ export function Sub2ApiSettings() {
       </p>
       <div className="s2a_field" style={{ marginTop: 2 }}>
         <label className="s2a_fieldLabel">Sub2API Base URL</label>
-        <input className="s2a_input" value={baseURL} placeholder="http://localhost:8080/v1" onChange={(event) => setBaseURL(event.target.value)} />
+        <input className="s2a_input" value={baseURL} placeholder="http://localhost:8080" onChange={(event) => setBaseURL(event.target.value)} />
       </div>
       <div className="s2a_rowCard">
         <div className="s2a_rowHead">

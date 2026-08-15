@@ -14,9 +14,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { API_PROTOCOLS, PROVIDERS, type ApiProtocol, type CatalogModel, type Config, type ImageToolModelRef, type ImageToolsConfig, type ProviderKey, type ProviderProfile } from './index.ts'
+import { API_PROTOCOLS, PROVIDERS, gatewayApiRoot, type ApiProtocol, type CatalogModel, type Config, type ImageToolModelRef, type ImageToolsConfig, type ProviderKey, type ProviderProfile } from './index.ts'
 
 export const ROUTES = {
   get: '/plugins/dsh-sub2api/config',
@@ -24,6 +25,7 @@ export const ROUTES = {
   discover: '/plugins/dsh-sub2api/discover',
   usage: '/plugins/dsh-sub2api/usage',
   status: '/plugins/dsh-sub2api/status',
+  attachment: '/plugins/dsh-sub2api/attachment',
 } as const
 
 export interface ConfigPayload {
@@ -314,7 +316,7 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
         } catch (error) {
           return json(res, 400, { error: safeMessage(error) })
         }
-        const response = await fetch(`${baseURL}/models`, {
+        const response = await fetch(`${gatewayApiRoot(baseURL)}/models`, {
           method: 'GET',
           headers: { authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(30000),
@@ -353,7 +355,7 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
         } catch (error) {
           return json(res, 400, { error: safeMessage(error) })
         }
-        const response = await fetch(`${baseURL}/usage`, {
+        const response = await fetch(`${gatewayApiRoot(baseURL)}/usage`, {
           method: 'GET',
           headers: { authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(30000),
@@ -403,5 +405,42 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
       }
       json(res, 200, { routes: routes.listRegisteredRoutes(), models })
     })
+
+    // GET attachment: serve one durable image attachment as raw bytes so the
+    // generate_image tool card can render it inline (<img src>). The request
+    // carries the full ImageAttachmentRef (base64url JSON in `ref`); the
+    // attachment store re-verifies the digest against the stored object, so a
+    // forged ref cannot read anything — the id must match the bytes exactly.
+    // Bound to trusted local origins like every other plugin route.
+    webCtx.webServer.register({ kind: 'prefix', path: ROUTES.attachment, handler: async (req, res) => {
+      if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
+      if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
+      let ref: ImageAttachmentRef
+      try {
+        const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
+        const raw = url.searchParams.get('ref') ?? ''
+        if (raw.length === 0) return json(res, 400, { error: 'ref is required' })
+        const parsed: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
+        if (typeof parsed !== 'object' || parsed === null) throw new Error('ref must be an object')
+        const candidate = parsed as Record<string, unknown>
+        if (typeof candidate.attachmentId !== 'string' || typeof candidate.mediaType !== 'string') throw new Error('ref is incomplete')
+        ref = candidate as unknown as ImageAttachmentRef
+      } catch {
+        return json(res, 400, { error: 'invalid ref' })
+      }
+      const attachments = ctx.get('attachments')
+      if (attachments === undefined) return json(res, 503, { error: 'attachment service unavailable' })
+      try {
+        const stored = await attachments.readImage(ref)
+        res.writeHead(200, {
+          'content-type': stored.ref.mediaType,
+          'cache-control': 'private, max-age=86400',
+          'x-content-type-options': 'nosniff',
+        })
+        res.end(Buffer.from(stored.data))
+      } catch {
+        json(res, 404, { error: 'attachment not found' })
+      }
+    } })
   })
 }
