@@ -1,0 +1,11 @@
+# Sub2API routes for the harness LLM seam.
+# One base URL, per-key provider routes. Keys are configured through the
+# `llm-sub2api:` settings section (the web Models page writes it, or edit
+# $DSH_HOME/settings.yaml directly); the adapter registers a route per
+# configured key and drops dormant routes when a key is cleared.
+#
+# Does not override agent-default-model.
+
+- insert:
+    - id: llm-sub2api
+      name: dsh-sub2api
