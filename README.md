@@ -21,7 +21,7 @@ Sub2API is an AI API gateway that turns subscription quota into OpenAI-compatibl
 ## Install
 
 ```bash
-dsh plugin --profile web add dsh-sub2api
+dsh plugin --profile web add @godd6366/dsh-sub2api
 ```
 
 or, from this repository:

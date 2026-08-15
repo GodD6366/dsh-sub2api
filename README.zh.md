@@ -22,7 +22,7 @@ sub2api 是一个把订阅配额转成 OpenAI 兼容 API 的网关。它的模�
 ## 安装
 
 ```bash
-dsh plugin --profile web add dsh-sub2api
+dsh plugin --profile web add @godd6366/dsh-sub2api
 ```
 
 或直接在本仓库目录：
