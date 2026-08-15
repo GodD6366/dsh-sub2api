@@ -16,6 +16,36 @@ import type { ProviderIconName } from './icons.tsx'
 const BASE = '/plugins/dsh-sub2api'
 const MODELS_DEV_API = 'https://models.dev/api.json'
 
+/** Model-row controls matching the official Models page. */
+function IconTrash() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path
+        d="M3.5 5.25h13M8 5.25V3.5h4v1.75M5.25 5.25l.8 10.1c.05.65.6 1.15 1.25 1.15h5.4c.65 0 1.2-.5 1.25-1.15l.8-10.1M8.25 8v5.75M11.75 8v5.75"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function IconChevron({ expanded }: { expanded: boolean }) {
+  return (
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden
+      style={{ transform: expanded ? 'rotate(90deg)' : undefined, transition: 'transform 120ms ease' }}
+    >
+      <path d="m7.5 4.75 5.25 5.25-5.25 5.25" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 interface ProviderDefinition {
   key: string
   label: string
@@ -51,21 +81,32 @@ const css = `
 .s2a_rowTag{border:1px solid var(--dsw-alias-border-l3);color:var(--dsw-alias-label-secondary);border-radius:4px;flex:none;padding:1px 6px;font-size:11px;line-height:16px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .s2a_editor{background:var(--dsw-alias-bg-module-platform);border-radius:8px;flex-direction:column;gap:12px;padding:12px 14px;display:flex}
 .s2a_rowActions,.s2a_modelActions{align-items:center;gap:4px;margin-left:auto;display:inline-flex}
-.s2a_btn,.s2a_primary,.s2a_iconBtn{box-sizing:border-box;height:32px;font:inherit;cursor:pointer;border:none;justify-content:center;align-items:center;gap:4px;font-size:13px;line-height:20px;display:inline-flex}
+.s2a_btn,.s2a_primary{box-sizing:border-box;height:32px;font:inherit;cursor:pointer;border:none;justify-content:center;align-items:center;gap:4px;font-size:13px;line-height:20px;display:inline-flex}
 .s2a_btn,.s2a_primary{border-radius:16px;padding:0 14px}
-.s2a_iconBtn{width:32px;border-radius:50%;padding:0;font-size:19px}
 .s2a_primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}
 .s2a_primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
-.s2a_btn,.s2a_iconBtn{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:transparent}
-.s2a_btn:hover:not(:disabled),.s2a_iconBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
-.s2a_btn:disabled,.s2a_primary:disabled,.s2a_iconBtn:disabled{opacity:.4;cursor:default}
-.s2a_btn:focus-visible,.s2a_primary:focus-visible,.s2a_iconBtn:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3);outline:none}
-.s2a_models{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;overflow:hidden}
-.s2a_modelHeader,.s2a_modelRow{grid-template-columns:minmax(140px,1.3fr) minmax(120px,1fr) minmax(96px,.7fr) minmax(96px,.7fr) minmax(128px,.9fr) 32px;align-items:center;gap:8px;display:grid}
-.s2a_modelHeader{min-height:30px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);padding:0 8px;font-size:11px;line-height:16px}
-.s2a_modelRow{border-top:1px solid var(--dsw-alias-border-l2);padding:8px}
-.s2a_modelRow:first-child{border-top:none}
-.s2a_modelEmpty{color:var(--dsw-alias-label-tertiary);margin:0;padding:16px 10px;text-align:center;font-size:12px;line-height:18px}
+.s2a_btn{border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);background:transparent}
+.s2a_btn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.s2a_btn:disabled,.s2a_primary:disabled{opacity:.4;cursor:default}
+.s2a_btn:focus-visible,.s2a_primary:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3);outline:none}
+/* Square, label-free icon affordance matching the official Models page: the
+   row's inputs carry the meaning, the trash glyph announces deletion. */
+.s2a_iconBtn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:0}
+.s2a_iconBtn:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.s2a_iconBtn:disabled{opacity:.4;cursor:default}
+.s2a_iconBtn:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3);outline:none}
+.s2a_trash:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
+.s2a_models{flex-direction:column;gap:10px;display:flex}
+.s2a_modelItem{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}
+.s2a_modelSummary{grid-template-columns:minmax(0,1fr) minmax(0,.72fr) 44px 32px;align-items:center;gap:10px;padding:9px 10px 9px 12px;display:grid}
+.s2a_modelSummary .s2a_input{height:38px;border-radius:7px;padding:0 12px;font-size:14px}
+.s2a_expandBtn{width:44px;height:38px;border-radius:7px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary)}
+.s2a_modelDetails{border-top:1px solid var(--dsw-alias-border-l2);grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px 12px;padding:10px 12px 12px;display:grid}
+.s2a_modelDetails .s2a_fieldLabel{font-size:12px;font-weight:400}
+/* Derived, read-only display for fields auto-filled from models.dev. */
+.s2a_readonly{box-sizing:border-box;width:100%;height:32px;font:inherit;border:1px dashed var(--dsw-alias-border-l3);background:transparent;color:var(--dsw-alias-label-secondary);border-radius:8px;padding:0 10px;font-size:13px;line-height:30px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s2a_reasoningField{grid-column:1/-1}
+.s2a_modelEmpty{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-tertiary);margin:0;padding:16px 10px;text-align:center;font-size:12px;line-height:18px}
 .s2a_modelFooter{align-items:center;justify-content:space-between;gap:8px;display:flex}
 .s2a_modelSource{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .s2a_modelSource a{color:inherit;text-decoration:underline;text-underline-offset:2px}
@@ -74,10 +115,10 @@ const css = `
 .s2a_statusOk{color:var(--dsw-alias-state-success-primary)}
 .s2a_statusErr{color:var(--dsw-alias-state-error-primary)}
 @media(max-width:620px){
-  .s2a_section,.s2a_rowIdentity,.s2a_modelCell{min-width:0}.s2a_rowCard{padding:10px 8px}.s2a_editor{padding:8px 0}
+  .s2a_section,.s2a_rowIdentity{min-width:0}.s2a_rowCard{padding:10px 8px}.s2a_editor{padding:8px 0}
   .s2a_rowHead{align-items:flex-start;flex-wrap:wrap}.s2a_rowIdentity{flex-wrap:wrap}.s2a_rowTag{box-sizing:border-box;width:100%;max-width:100%;min-width:0;flex:1 1 100%;white-space:normal;overflow-wrap:anywhere}.s2a_rowActions{width:100%;margin-left:0;flex-direction:column;align-items:stretch}.s2a_rowActions .s2a_btn{width:100%}
-  .s2a_modelHeader{display:none}.s2a_modelRow{grid-template-columns:minmax(0,1fr);gap:6px;padding:6px 4px}.s2a_modelCell,.s2a_iconBtn{grid-column:1/-1}.s2a_iconBtn{justify-self:end}
-  .s2a_modelCell:before{content:attr(data-label);color:var(--dsw-alias-label-tertiary);margin-bottom:3px;font-size:11px;line-height:16px;display:block}
+  .s2a_modelSummary{grid-template-columns:minmax(0,1fr) 44px 32px;gap:8px;padding:8px}.s2a_modelSummary>div:nth-child(2){grid-column:1/2;grid-row:2}.s2a_modelSummary>.s2a_expandBtn{grid-column:2;grid-row:1/3}.s2a_modelSummary>.s2a_trash{grid-column:3;grid-row:1/3}
+  .s2a_modelDetails{grid-template-columns:minmax(0,1fr)}.s2a_reasoningField{grid-column:auto}
   .s2a_modelFooter{align-items:stretch;flex-direction:column}.s2a_modelActions{width:100%;margin-left:0;align-items:stretch;flex-direction:column}.s2a_modelActions .s2a_btn{width:100%;padding:0 8px}
 }
 `
@@ -97,6 +138,7 @@ interface CatalogModel {
   name?: string
   contextWindow?: number
   maxTokens?: number
+  input?: Array<'text' | 'image'>
   reasoningEfforts?: string[]
 }
 
@@ -106,6 +148,8 @@ interface ModelRow {
   name: string
   contextWindow: string
   maxTokens: string
+  /** '' = 自动（按模型 ID 推断）; 'text' = 仅文本; 'text-image' = 文本 + 图片 */
+  input: string
   /** '' = 自动（未设置，按路由默认）; 'on' = 支持（档位见 effortLevels）; 'off' = 不支持 */
   reasoning: string
   /** 该模型实际支持的推理档位（reasoning === 'on' 时保存到配置） */
@@ -120,15 +164,33 @@ interface ProviderState {
   models: ModelRow[]
 }
 
+interface ImageToolModelRef {
+  provider: string
+  model: string
+}
+
+interface ImageToolsState {
+  analyze: ImageToolModelRef
+  generate: ImageToolModelRef
+}
+
 interface ConfigState {
   baseURL: string
   catalogFormat?: 'structured-v1'
   providers: Record<string, { keyConfigured: boolean; models: Array<CatalogModel | string> }>
+  tools?: {
+    analyze?: ImageToolModelRef
+    generate?: ImageToolModelRef
+  }
 }
 
 interface ModelsDevModel {
   id?: string
   name?: string
+  /** Whether the model accepts image input (models.dev `attachment`). */
+  attachment?: boolean
+  /** Explicit modality list when the entry carries one. */
+  modalities?: { input?: string[] }
   reasoning?: boolean
   /** models.dev JSON key is `reasoning_options` (snake_case). */
   reasoning_options?: Array<{ type?: string; values?: string[] }>
@@ -147,7 +209,7 @@ let modelsDevRequest: Promise<ModelsDevCatalog> | undefined
 function modelRow(model: CatalogModel | string = { id: '' }): ModelRow {
   if (typeof model === 'string') {
     const [id = '', name = '', contextWindow = ''] = model.split('|')
-    return { rowId: nextRowId++, id: id.trim(), name: name.trim(), contextWindow: contextWindow.trim(), maxTokens: '', reasoning: '', effortLevels: [] }
+    return { rowId: nextRowId++, id: id.trim(), name: name.trim(), contextWindow: contextWindow.trim(), maxTokens: '', input: '', reasoning: '', effortLevels: [] }
   }
   const reasoningEfforts = model.reasoningEfforts
   return {
@@ -156,6 +218,7 @@ function modelRow(model: CatalogModel | string = { id: '' }): ModelRow {
     name: model.name ?? '',
     contextWindow: model.contextWindow !== undefined ? String(model.contextWindow) : '',
     maxTokens: model.maxTokens !== undefined ? String(model.maxTokens) : '',
+    input: model.input === undefined ? '' : model.input.includes('image') ? 'text-image' : 'text',
     reasoning: reasoningEfforts === undefined ? '' : reasoningEfforts.length === 0 ? 'off' : 'on',
     effortLevels: reasoningEfforts !== undefined && reasoningEfforts.length > 0 ? [...reasoningEfforts] : [],
   }
@@ -209,6 +272,18 @@ function officialEffortValues(official: ModelsDevModel): string[] | undefined {
   return values.filter((value): value is string => typeof value === 'string' && value.length > 0)
 }
 
+/**
+ * Image-input modality derived from models.dev: an explicit modality list
+ * wins, then the `attachment` flag. Absent means the entry says nothing, and
+ * the row keeps "auto" (the adapter infers from the model id).
+ */
+function officialInput(official: ModelsDevModel): 'text' | 'text-image' | undefined {
+  const input = official.modalities?.input
+  if (Array.isArray(input) && input.includes('image')) return 'text-image'
+  if (typeof official.attachment === 'boolean') return official.attachment ? 'text-image' : 'text'
+  return undefined
+}
+
 function applyOfficialDefaults(rows: ModelRow[], def: ProviderDefinition, catalog: ModelsDevCatalog): { rows: ModelRow[]; filled: number } {
   let filled = 0
   const next = rows.map((row) => {
@@ -223,6 +298,8 @@ function applyOfficialDefaults(rows: ModelRow[], def: ProviderDefinition, catalo
     const maxTokens = row.maxTokens.length === 0 && Number.isSafeInteger(officialOutput) && (officialOutput ?? 0) > 0
       ? String(officialOutput)
       : row.maxTokens
+    // 图片输入：models.dev 有数据就自动定，用户不用选
+    const input = row.input.length === 0 && officialInput(official) !== undefined ? officialInput(official)! : row.input
     const officialEfforts = officialEffortValues(official)
     let reasoning = row.reasoning
     let effortLevels = row.effortLevels
@@ -237,9 +314,10 @@ function applyOfficialDefaults(rows: ModelRow[], def: ProviderDefinition, catalo
     }
     if (
       name !== row.name || contextWindow !== row.contextWindow || maxTokens !== row.maxTokens
+      || input !== row.input
       || reasoning !== row.reasoning || effortLevels.join(',') !== row.effortLevels.join(',')
     ) filled++
-    return { ...row, name, contextWindow, maxTokens, reasoning, effortLevels }
+    return { ...row, name, contextWindow, maxTokens, input, reasoning, effortLevels }
   })
   return { rows: next, filled }
 }
@@ -261,10 +339,54 @@ function emptyProvider(): ProviderState {
   return { key: '', keyConfigured: false, models: [] }
 }
 
+function emptyToolRef(): ImageToolModelRef {
+  return { provider: '', model: '' }
+}
+
+function emptyTools(): ImageToolsState {
+  return { analyze: emptyToolRef(), generate: emptyToolRef() }
+}
+
+function toolRefFromConfig(value: ImageToolModelRef | undefined): ImageToolModelRef {
+  return {
+    provider: value?.provider ?? '',
+    model: value?.model ?? '',
+  }
+}
+
+function toolOptions(providers: Record<string, ProviderState>): Array<{ value: string; label: string; provider: string; model: string }> {
+  const options: Array<{ value: string; label: string; provider: string; model: string }> = []
+  for (const def of PROVIDERS) {
+    const provider = providers[def.key]
+    if (provider === undefined) continue
+    for (const row of provider.models) {
+      const id = row.id.trim()
+      if (id.length === 0) continue
+      const name = row.name.trim()
+      options.push({
+        value: `${def.key}:${id}`,
+        label: `${def.label} / ${name.length > 0 ? `${name} (${id})` : id}`,
+        provider: def.key,
+        model: id,
+      })
+    }
+  }
+  return options
+}
+
+function serializeToolRef(ref: ImageToolModelRef): ImageToolModelRef | undefined {
+  const provider = ref.provider.trim()
+  const model = ref.model.trim()
+  if (provider.length === 0 || model.length === 0) return undefined
+  return { provider, model }
+}
+
 export function Sub2ApiSettings() {
   const [baseURL, setBaseURL] = useState('')
   const [providers, setProviders] = useState<Record<string, ProviderState>>({})
+  const [tools, setTools] = useState<ImageToolsState>(emptyTools())
   const [structuredConfig, setStructuredConfig] = useState(false)
+  const [expandedModels, setExpandedModels] = useState<Set<number>>(() => new Set())
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -285,6 +407,10 @@ export function Sub2ApiSettings() {
           }
         }
         setProviders(map)
+        setTools({
+          analyze: toolRefFromConfig(cfg.tools?.analyze),
+          generate: toolRefFromConfig(cfg.tools?.generate),
+        })
         try {
           const catalog = await loadModelsDev()
           setProviders((current) => {
@@ -309,6 +435,15 @@ export function Sub2ApiSettings() {
   const updateModel = (providerKey: string, rowId: number, patch: Partial<ModelRow>) => {
     const provider = providers[providerKey] ?? emptyProvider()
     updateProvider(providerKey, { models: provider.models.map((row) => row.rowId === rowId ? { ...row, ...patch } : row) })
+  }
+
+  const toggleModel = (rowId: number) => {
+    setExpandedModels((current) => {
+      const next = new Set(current)
+      if (next.has(rowId)) next.delete(rowId)
+      else next.add(rowId)
+      return next
+    })
   }
 
   const fillModel = async (def: ProviderDefinition, rowId: number) => {
@@ -344,7 +479,11 @@ export function Sub2ApiSettings() {
     setBusy('save'); setError(''); setMessage('')
     try {
       if (!structuredConfig) throw new Error('服务端仍在运行旧版插件，请重启 DSH Web 后再保存结构化模型配置')
-      const payload = { baseURL, providers: {} as Record<string, { apiKey: string; models: CatalogModel[] }> }
+      const payload = {
+        baseURL,
+        providers: {} as Record<string, { apiKey: string; models: CatalogModel[] }>,
+        tools: {} as { analyze?: ImageToolModelRef; generate?: ImageToolModelRef },
+      }
       for (const def of PROVIDERS) {
         const provider = providers[def.key] ?? emptyProvider()
         const nonEmptyRows = provider.models.filter((row) =>
@@ -367,16 +506,26 @@ export function Sub2ApiSettings() {
           const reasoningEfforts = row.reasoning === 'off' ? [] : row.reasoning === 'on'
             ? (row.effortLevels.length > 0 ? row.effortLevels : [...DEFAULT_REASONING_LEVELS])
             : undefined
+          const input: Array<'text' | 'image'> | undefined = row.input === 'text-image'
+            ? ['text', 'image']
+            : row.input === 'text'
+              ? ['text']
+              : undefined
           return {
             id,
             ...(name.length > 0 ? { name } : {}),
             ...(contextWindow !== undefined ? { contextWindow } : {}),
             ...(maxTokens !== undefined ? { maxTokens } : {}),
+            ...(input !== undefined ? { input } : {}),
             ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
           }
         })
         payload.providers[def.key] = { apiKey: provider.key, models }
       }
+      const analyze = serializeToolRef(tools.analyze)
+      const generate = serializeToolRef(tools.generate)
+      if (analyze !== undefined) payload.tools.analyze = analyze
+      if (generate !== undefined) payload.tools.generate = generate
       const res = await api<{ ok: boolean; routes?: string[] }>(`${BASE}/config`, { method: 'POST', body: JSON.stringify(payload) })
       const routes = res.routes !== undefined && res.routes.length > 0 ? res.routes.join(', ') : '无（未填 key）'
       setMessage(`已保存。激活路由: ${routes}`)
@@ -390,10 +539,12 @@ export function Sub2ApiSettings() {
   const discover = async (def: ProviderDefinition) => {
     const key = providers[def.key]?.key ?? ''
     setBusy(`discover-${def.key}`); setError(''); setMessage('')
+    // 先清空现有模型列表，再重新拉取：失败的拉取不会残留旧列表。
+    updateProvider(def.key, { models: [] })
     try {
       const res = await api<{ ok: boolean; models: CatalogModel[] }>(`${BASE}/discover`, {
         method: 'POST',
-        body: JSON.stringify({ baseURL, apiKey: key }),
+        body: JSON.stringify({ baseURL, apiKey: key, provider: def.key }),
       })
       let rows = (res.models ?? []).map(modelRow)
       try {
@@ -416,7 +567,7 @@ export function Sub2ApiSettings() {
     try {
       const res = await api<{ ok: boolean; summary?: string }>(`${BASE}/usage`, {
         method: 'POST',
-        body: JSON.stringify({ baseURL, apiKey: key }),
+        body: JSON.stringify({ baseURL, apiKey: key, provider: def.key }),
       })
       setMessage(`${def.label} 用量: ${res.summary ?? ''}`)
     } catch (e) {
@@ -446,11 +597,56 @@ export function Sub2ApiSettings() {
         Gemini）与可用模型。
       </p>
       <p className="s2a_notice">
-        提示：先在 sub2api 后台创建各平台的分组并生成 API key，再填入下方。默认端口 8080，例如 http://localhost:8080/v1。
+        提示：先在 sub2api 后台创建各平台的分组并生成 API key，再填入下方。
       </p>
       <div className="s2a_field" style={{ marginTop: 2 }}>
         <label className="s2a_fieldLabel">Sub2API Base URL</label>
         <input className="s2a_input" value={baseURL} placeholder="http://localhost:8080/v1" onChange={(event) => setBaseURL(event.target.value)} />
+      </div>
+      <div className="s2a_rowCard">
+        <div className="s2a_rowHead">
+          <div className="s2a_rowIdentity">
+            <span className="s2a_rowName">全局图像工具</span>
+            <span className="s2a_rowTag">analyze_image / generate_image</span>
+          </div>
+        </div>
+        <div className="s2a_editor">
+          <p className="s2a_intro">
+            给当前会话模型补两个全局工具：识图走 vision 模型，生图走 image 模型。未配置时工具仍会出现，但调用会提示先在这里指定模型。
+          </p>
+          {(['analyze', 'generate'] as const).map((kind) => {
+            const label = kind === 'analyze' ? '识图模型' : '生图模型'
+            const ref = tools[kind]
+            const options = toolOptions(providers)
+            const selected = ref.provider.length > 0 && ref.model.length > 0 ? `${ref.provider}:${ref.model}` : ''
+            const known = options.some((option) => option.value === selected)
+            return (
+              <div key={kind} className="s2a_field">
+                <label className="s2a_fieldLabel">{label}</label>
+                <select
+                  className="s2a_input"
+                  value={selected}
+                  aria-label={label}
+                  onChange={(event) => {
+                    const next = options.find((option) => option.value === event.target.value)
+                    setTools((current) => ({
+                      ...current,
+                      [kind]: next === undefined ? emptyToolRef() : { provider: next.provider, model: next.model },
+                    }))
+                  }}
+                >
+                  <option value="">未指定</option>
+                  {!known && selected.length > 0 && (
+                    <option value={selected}>{`${ref.provider} / ${ref.model}（不在当前目录）`}</option>
+                  )}
+                  {options.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+            )
+          })}
+        </div>
       </div>
       <ul className="s2a_rows">
         {PROVIDERS.map((def) => {
@@ -488,93 +684,103 @@ export function Sub2ApiSettings() {
                 <div className="s2a_field">
                   <label className="s2a_fieldLabel">模型列表</label>
                   <div className="s2a_models">
-                    {provider.models.length > 0 && (
-                      <div className="s2a_modelHeader" aria-hidden="true">
-                        <span>模型 ID</span><span>名称</span><span>Context Window</span><span>Max Tokens</span><span>思考强度</span><span />
-                      </div>
-                    )}
                     {provider.models.length === 0
                       ? <p className="s2a_modelEmpty">暂无模型</p>
-                      : provider.models.map((row) => (
-                        <div key={row.rowId} className="s2a_modelRow">
-                          <div className="s2a_modelCell" data-label="模型 ID">
-                            <input
-                              className="s2a_input"
-                              value={row.id}
-                              placeholder="gpt-4o"
-                              aria-label={`${def.label} 模型 ID`}
-                              onChange={(event) => updateModel(def.key, row.rowId, { id: event.target.value })}
-                              onBlur={() => fillModel(def, row.rowId)}
-                            />
-                          </div>
-                          <div className="s2a_modelCell" data-label="名称">
-                            <input
-                              className="s2a_input"
-                              value={row.name}
-                              placeholder="自动填充"
-                              aria-label={`${def.label} 模型名称`}
-                              onChange={(event) => updateModel(def.key, row.rowId, { name: event.target.value })}
-                            />
-                          </div>
-                          <div className="s2a_modelCell" data-label="Context Window">
-                            <input
-                              className="s2a_input"
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={row.contextWindow}
-                              placeholder="自动填充"
-                              aria-label={`${def.label} Context Window`}
-                              onChange={(event) => updateModel(def.key, row.rowId, { contextWindow: event.target.value })}
-                            />
-                          </div>
-                          <div className="s2a_modelCell" data-label="Max Tokens">
-                            <input
-                              className="s2a_input"
-                              type="number"
-                              min="1"
-                              step="1"
-                              value={row.maxTokens}
-                              placeholder="自动填充"
-                              aria-label={`${def.label} Max Tokens`}
-                              onChange={(event) => updateModel(def.key, row.rowId, { maxTokens: event.target.value })}
-                            />
-                          </div>
-                          <div className="s2a_modelCell" data-label="思考强度">
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                              <select
-                                className="s2a_input"
-                                value={row.reasoning}
-                                aria-label={`${def.label} 思考强度`}
-                                onChange={(event) => updateModel(def.key, row.rowId, { reasoning: event.target.value })}
-                              >
-                                <option value="">自动（未设置）</option>
-                                <option value="on">{row.effortLevels.length > 0 ? `支持（${row.effortLevels.join(' / ')}）` : '支持'}</option>
-                                <option value="off">不支持</option>
-                              </select>
-                              {row.reasoning === 'on' && (
+                      : provider.models.map((row) => {
+                        const expanded = expandedModels.has(row.rowId)
+                        const detailsId = `s2a-model-${row.rowId}-details`
+                        return (
+                          <div key={row.rowId} className="s2a_modelItem">
+                            <div className="s2a_modelSummary">
+                              <div>
                                 <input
                                   className="s2a_input"
-                                  value={row.effortLevels.join(', ')}
-                                  placeholder="如 low, medium, high"
-                                  aria-label={`${def.label} 推理档位`}
-                                  onChange={(event) => updateModel(def.key, row.rowId, {
-                                    effortLevels: event.target.value.split(',').map((level) => level.trim()).filter((level) => level.length > 0),
-                                  })}
+                                  value={row.id}
+                                  placeholder="模型 ID"
+                                  aria-label={`${def.label} 模型 ID`}
+                                  onChange={(event) => updateModel(def.key, row.rowId, { id: event.target.value })}
+                                  onBlur={() => fillModel(def, row.rowId)}
                                 />
-                              )}
+                              </div>
+                              <div>
+                                <input
+                                  className="s2a_input"
+                                  value={row.name}
+                                  placeholder="名称"
+                                  aria-label={`${def.label} 模型名称`}
+                                  onChange={(event) => updateModel(def.key, row.rowId, { name: event.target.value })}
+                                />
+                              </div>
+                              <button
+                                type="button"
+                                className="s2a_iconBtn s2a_expandBtn"
+                                title={expanded ? '收起模型详情' : '展开模型详情'}
+                                aria-label={expanded ? `收起 ${row.id || '模型'} 详情` : `展开 ${row.id || '模型'} 详情`}
+                                aria-expanded={expanded}
+                                aria-controls={detailsId}
+                                onClick={() => toggleModel(row.rowId)}
+                              >
+                                <IconChevron expanded={expanded} />
+                              </button>
+                              <button
+                                type="button"
+                                className="s2a_iconBtn s2a_trash"
+                                title="删除模型"
+                                aria-label={`删除 ${row.id || '模型'}`}
+                                onClick={() => updateProvider(def.key, { models: provider.models.filter((item) => item.rowId !== row.rowId) })}
+                              >
+                                <IconTrash />
+                              </button>
                             </div>
+                            {expanded && (
+                              <div id={detailsId} className="s2a_modelDetails">
+                                <div className="s2a_field">
+                                  <label className="s2a_fieldLabel">上下文窗口</label>
+                                  <input
+                                    className="s2a_input"
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={row.contextWindow}
+                                    placeholder="自动填充"
+                                    aria-label={`${def.label} 上下文窗口`}
+                                    onChange={(event) => updateModel(def.key, row.rowId, { contextWindow: event.target.value })}
+                                  />
+                                </div>
+                                <div className="s2a_field">
+                                  <label className="s2a_fieldLabel">最大输出 token</label>
+                                  <input
+                                    className="s2a_input"
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={row.maxTokens}
+                                    placeholder="自动填充"
+                                    aria-label={`${def.label} 最大输出 token`}
+                                    onChange={(event) => updateModel(def.key, row.rowId, { maxTokens: event.target.value })}
+                                  />
+                                </div>
+                                <div className="s2a_field">
+                                  <label className="s2a_fieldLabel">图片输入（自动补全）</label>
+                                  <div className="s2a_readonly">
+                                    {row.input === 'text-image' ? '文本 + 图片' : row.input === 'text' ? '仅文本' : '自动（按模型推断）'}
+                                  </div>
+                                </div>
+                                <div className="s2a_field s2a_reasoningField">
+                                  <label className="s2a_fieldLabel">思考强度（自动补全）</label>
+                                  <div className="s2a_readonly">
+                                    {row.reasoning === 'on'
+                                      ? (row.effortLevels.length > 0 ? row.effortLevels.join(' / ') : '支持')
+                                      : row.reasoning === 'off'
+                                        ? '不支持'
+                                        : '自动（low / medium / high）'}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          <button
-                            className="s2a_iconBtn"
-                            title="删除模型"
-                            aria-label={`删除 ${row.id || '模型'}`}
-                            onClick={() => updateProvider(def.key, { models: provider.models.filter((item) => item.rowId !== row.rowId) })}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
+                        )
+                      })}
                   </div>
                   <div className="s2a_modelFooter">
                     <span className="s2a_modelSource">

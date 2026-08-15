@@ -13,6 +13,8 @@ sub2api 是一个把订阅配额转成 OpenAI 兼容 API 的网关。它的模�
 - **推理等级（思考模式）**：对话模型选择器可直接调整 `reasoning_effort`（透传网关）；设置页「思考强度」列按 [models.dev](https://models.dev/) 的 `reasoning_options` 逐模型填充真实档位（如 `gpt-5.6-sol` 为 none/low/medium/high/xhigh/max，`deepseek-v4-flash` 为 low/high/max），可手动增删档位或显式关闭。
 - **用量查询**：「查看用量」调用 `GET {baseURL}/usage`，汇总配额、余额、限流窗口与订阅周期用量。
 - **标准配置**：baseURL 与模型目录存于 `llm-sub2api:` 设置节（`$DSH_HOME/settings.yaml`，web 模型页可直接写入）；key 走 harness 凭据存储。
+- **全局识图 / 生图工具**：即使当前会话模型不支持图片，也可以调用 `analyze_image` 和 `generate_image`。它们走设置页指定的识图 / 生图模型，返回文字描述或工作区文件路径，不会把图片块塞进纯文本会话。
+- **Auto Vision（自动识图）**：给纯文本模型图片能力。**不仅覆盖本插件自己的 `sub2api-*` 路由，还自动包装所有已注册的文本模型提供商**——deepseek 官方（`deepseek-official`）、`llm-pi-ai`、其他插件添加的路由都会生成同名镜像（如 `deepseek-official-vision`，模型选择器中显示为「DeepSeek + 自动识图」）。镜像路由声明图片输入，通过 harness 附件准入后，把图片块改写为视觉模型转述（走设置的识图模型，按附件缓存），再以纯文本回合委托给原模型——DeepSeek 始终只收文本，视觉模型只当眼睛。跟随 `llm/adapters-updated` 事件自动增删镜像，与其他插件的同名路由冲突时自动跳过。
 - **供应商图标**来自 [lobehub/lobe-icons](https://lobehub.com/icons)，以 SVG 内嵌在设置页中。
 
 ## 安装
@@ -48,9 +50,69 @@ llm-sub2api:
       apiKeyEnv: SUB2API_GROK_API_KEY
     gemini:
       apiKeyEnv: SUB2API_GEMINI_API_KEY
+  tools:
+    analyze:
+      provider: openai
+      model: gpt-4o
+    generate:
+      provider: openai
+      model: gpt-image-1
 ```
 
 通过凭据服务存储各 key（web 模型页可写入，或导出 `SUB2API_OPENAI_API_KEY=…` 等环境变量）。某平台填了 key 后对应路由才激活；清空 key 即可移除该路由。
+
+### Auto Vision（自动识图）
+
+默认开启。**不仅包装 `sub2api-*` 自己的路由，也自动包装所有已注册的文本模型提供商**（deepseek 官方 `deepseek-official`、`llm-pi-ai`、其他插件添加的路由），各自生成同名镜像（`<route>-vision`，如 `deepseek-official-vision`）。镜像里的模型 id 与显示名都带 **`-vision` 后缀**（如 `deepseek-v4-flash-vision`），一眼区分哪些模型支持识图；委托回原路由时后缀自动剥除，网关收到的仍是原模型 id。发图前在右下角模型选择器中选「+ 自动识图」分组（如 **DeepSeek + 自动识图** → `deepseek-v4-flash-vision`），然后正常粘贴/上传图片即可：
+
+1. 镜像路由的模型条目声明 `inputModalities: ['text', 'image']`，通过 harness 的附件准入——纯文本模型不再报 `does not support image input`。
+2. 回合中图片块被改写为视觉模型转述（走上面 `tools.analyze` 配置的识图模型），按附件 ID 缓存，后续回合直接复用，不重复调用。
+3. 转述后的纯文本回合委托给原 DeepSeek/文本模型处理，会话日志保留原始图片块。
+
+只在镜像路由上包装**纯文本模型**；原生多模态模型（如 `gpt-5.6-luna`）仍保留基础路由的原生图片输入。若想关闭镜像路由，在 `settings.yaml` 中设置：
+
+```yaml
+llm-sub2api:
+  autoVision: false
+```
+
+> 注意：发图前必须选「+ 自动识图」分组。仍在原文本路由上发原生图片附件，harness 准入会在插件改写前直接拒绝。
+
+### 网关协议（自动选择）
+
+sub2api 网关的每个分组在上游走**原生协议**，插件按 key 所属分组自动选择，无需配置：
+
+| 分组 | 自动选择 | 请求端点 |
+|---|---|---|
+| openai | `openai-responses` | `POST {baseURL}/responses` |
+| claude | `anthropic-messages` | `POST {baseURL}/messages` |
+| grok / gemini | `openai-completions` | `POST {baseURL}/chat/completions` |
+
+这样网关不需要做 chat/completions ↔ 原生协议转换——并行工具调用正是在这种转换中丢失/错位工具名和 ID，导致 `unknown tool ""`、`missing required property` 报错。如某分组网关实际不走原生协议，可在 settings.yaml 中为该 provider 显式声明 `api`（仅 yaml 层支持，设置页不提供该选项）：
+
+```yaml
+llm-sub2api:
+  baseURL: http://localhost:8080/v1
+  providers:
+    openai:
+      apiKeyEnv: SUB2API_OPENAI_API_KEY
+      api: openai-completions   # 可选：openai-completions / openai-responses / anthropic-messages
+      models:
+        - id: gpt-4o
+```
+
+`api` 可选值：`openai-completions`（`/chat/completions`）、`openai-responses`（`/responses`）、`anthropic-messages`（`/messages`）；省略 = 按上表自动。
+
+### 图片输入 / 思考强度（自动补全）
+
+会话中直接给模型挂图，需要模型声明 `image` 输入模态（否则 harness 在发送前拒绝，提示"当前模型不支持图片"）。**这两个字段都从 models.dev 自动补全，无需手选**（模型展开详情里以只读形式显示推导结果）：
+
+- **图片输入**：models.dev 的 `attachment` / `modalities.input` 有数据就自动定（如 gpt-5.6-luna → 文本+图片，deepseek-v4-flash → 仅文本）；没数据时按模型 ID 推断（`gpt-*` / `claude-*` / `gemini-*` / `grok-*` / `glm-*` 等默认支持图片），可手动在 settings.yaml 写 `input: [text]` 强制仅文本。
+- **思考强度**：models.dev 的 `reasoning_options` 有数据就自动填真实档位（如 deepseek-v4-flash → high/max）；否则默认 low/medium/high，`reasoning: false` 的模型自动标为不支持。
+
+挂图后请求按分组原生协议携带图片：openai → Responses `input_image`，claude → Messages `image`（base64），grok/gemini → chat/completions `image_url`。
+
+在 **设置 → Sub2API 模型 → 全局图像工具** 指定识图 / 生图模型。这两个工具是全局的：纯文本会话模型也可以调用 `analyze_image`（本地文件或 URL）和 `generate_image`（写入当前工作区）。生图先走 `POST {baseURL}/images/generations`，网关没有该端点时再回退到 chat completions。
 
 ## 开发
 

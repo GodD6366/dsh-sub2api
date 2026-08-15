@@ -16,7 +16,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { PROVIDERS, type CatalogModel, type Config } from './index.ts'
+import { API_PROTOCOLS, PROVIDERS, type ApiProtocol, type CatalogModel, type Config, type ImageToolModelRef, type ImageToolsConfig, type ProviderKey, type ProviderProfile } from './index.ts'
 
 export const ROUTES = {
   get: '/plugins/dsh-sub2api/config',
@@ -30,6 +30,7 @@ export interface ConfigPayload {
   baseURL: string
   catalogFormat: 'structured-v1'
   providers: Record<string, { keyConfigured: boolean; models: CatalogModel[] }>
+  tools: ImageToolsConfig
 }
 
 function trustedRequest(req: IncomingMessage): boolean {
@@ -86,7 +87,15 @@ function readProviderConfig(config: Config): ConfigPayload {
       models: profile.models?.map((model) => ({ ...model })) ?? [],
     }
   }
-  return { baseURL: config.baseURL, catalogFormat: 'structured-v1', providers }
+  return {
+    baseURL: config.baseURL,
+    catalogFormat: 'structured-v1',
+    providers,
+    tools: {
+      ...(config.tools?.analyze !== undefined ? { analyze: { ...config.tools.analyze } } : {}),
+      ...(config.tools?.generate !== undefined ? { generate: { ...config.tools.generate } } : {}),
+    },
+  }
 }
 
 function legacyCatalogModel(value: string): CatalogModel | undefined {
@@ -121,12 +130,16 @@ function structuredCatalogModel(value: unknown): CatalogModel | undefined {
   const reasoningEfforts = Array.isArray(raw.reasoningEfforts)
     ? (raw.reasoningEfforts as unknown[]).filter((effort): effort is string => typeof effort === 'string' && effort.length > 0)
     : undefined
+  const input = Array.isArray(raw.input)
+    ? (raw.input as unknown[]).filter((modality): modality is 'text' | 'image' => modality === 'text' || modality === 'image')
+    : undefined
   return {
     id,
     ...(name.length > 0 ? { name } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(input !== undefined && input.length > 0 ? { input } : {}),
   }
 }
 
@@ -142,10 +155,67 @@ function providerCredentialRef(platform: string): CredentialRef {
   return credentialRef(`SUB2API_${platform.toUpperCase()}_API_KEY`)
 }
 
+function isProviderKey(value: string): value is ProviderKey {
+  return PROVIDERS.some((def) => def.key === value)
+}
+
+function readToolModelRef(value: unknown): ImageToolModelRef | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const raw = value as Record<string, unknown>
+  const provider = typeof raw.provider === 'string' ? raw.provider.trim() : ''
+  const model = typeof raw.model === 'string' ? raw.model.trim() : ''
+  if (!isProviderKey(provider) || model.length === 0) return undefined
+  return { provider, model }
+}
+
+function readImageTools(value: unknown, fallback: ImageToolsConfig | undefined): ImageToolsConfig | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return fallback
+  const raw = value as Record<string, unknown>
+  const analyze = readToolModelRef(raw.analyze)
+  const generate = readToolModelRef(raw.generate)
+  if (analyze === undefined && generate === undefined) return undefined
+  return {
+    ...(analyze !== undefined ? { analyze } : {}),
+    ...(generate !== undefined ? { generate } : {}),
+  }
+}
+
 interface RouteContext {
   config: () => Config
   setConfig: (config: Config) => void | Promise<void>
   listRegisteredRoutes: () => string[]
+  /**
+   * Resolve the stored credential for one provider route. Used by discovery
+   * and usage probes when the settings form does not carry a freshly typed
+   * key (keys are write-only and stay in the credential store).
+   */
+  resolveApiKey: (route: string, profile: ProviderProfile) => Promise<string>
+}
+
+/**
+ * One-shot probe key for discovery/usage: a freshly typed key wins (it is the
+ * one under test); otherwise fall back to the credential already stored for
+ * that provider, so the settings page does not force the user to re-type the
+ * key every time.
+ */
+async function resolveProbeKey(
+  ctx: Context,
+  routes: RouteContext,
+  provider: string,
+  typedKey: string,
+): Promise<string> {
+  if (typedKey.length > 0) return typedKey
+  if (!isProviderKey(provider)) throw new Error('provider 无效，应为 openai / claude / grok / gemini')
+  const def = PROVIDERS.find((entry) => entry.key === provider)
+  const profile = routes.config().providers[provider]
+  if (profile?.apiKeyEnv === undefined) {
+    throw new Error(`${def?.label ?? provider} 未配置 API key：请先填写 key 并保存配置，再获取模型/查看用量`)
+  }
+  try {
+    return await routes.resolveApiKey(`sub2api-${provider}`, profile)
+  } catch (error) {
+    throw new Error(`无法使用已保存的 ${def?.label ?? provider} key：${safeMessage(error)}`)
+  }
 }
 
 export function registerRoutes(ctx: Context, routes: RouteContext): void {
@@ -184,6 +254,7 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
             grok: { ...current.providers.grok },
             gemini: { ...current.providers.gemini },
           },
+          ...(current.tools !== undefined ? { tools: { ...current.tools } } : {}),
         }
 
         const rawProviders = typeof body.providers === 'object' && body.providers !== null
@@ -201,8 +272,24 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
           } else if (apiKey.length > 0 && credentials === undefined) {
             profile.apiKeyEnv = providerCredentialRef(def.key)
           }
+          // Wire protocol: empty string clears an explicit override (the
+          // group's native protocol applies); a valid name sets one.
+          const api = typeof raw?.api === 'string' ? raw.api.trim() : undefined
+          if (api !== undefined) {
+            if (api.length === 0) {
+              delete profile.api
+            } else if ((API_PROTOCOLS as readonly string[]).includes(api)) {
+              profile.api = api as ApiProtocol
+            } else {
+              return json(res, 400, { error: `${def.label} 的网关协议 "${api}" 无效，应为 ${API_PROTOCOLS.join(' / ')}` })
+            }
+          }
           profile.models = readCatalogModels(raw?.models, profile.models ?? [])
         }
+
+        const tools = readImageTools(body.tools, current.tools)
+        if (tools !== undefined) next.tools = tools
+        else delete next.tools
 
         await routes.setConfig(next)
         json(res, 200, { ok: true, ...readProviderConfig(next), routes: routes.listRegisteredRoutes() })
@@ -211,16 +298,21 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
       }
     })
 
-    // POST discover: GET {baseURL}/models with a one-shot key.
+    // POST discover: GET {baseURL}/models. A freshly typed key wins; without
+    // one the stored credential for the provider is used.
     register(ROUTES.discover, async (req, res) => {
       if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
       if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
       try {
         const body = await readJson(req)
         const baseURL = typeof body.baseURL === 'string' ? body.baseURL.trim().replace(/\/+$/, '') : ''
-        const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
-        if (baseURL.length === 0 || apiKey.length === 0) {
-          return json(res, 400, { error: 'baseURL and apiKey are required' })
+        const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
+        if (baseURL.length === 0) return json(res, 400, { error: 'baseURL is required' })
+        let apiKey: string
+        try {
+          apiKey = await resolveProbeKey(ctx, routes, provider, typeof body.apiKey === 'string' ? body.apiKey.trim() : '')
+        } catch (error) {
+          return json(res, 400, { error: safeMessage(error) })
         }
         const response = await fetch(`${baseURL}/models`, {
           method: 'GET',
@@ -246,16 +338,20 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
       }
     })
 
-    // POST usage: GET {baseURL}/usage with a one-shot key.
+    // POST usage: GET {baseURL}/usage. Same key fallback as discovery.
     register(ROUTES.usage, async (req, res) => {
       if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
       if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
       try {
         const body = await readJson(req)
         const baseURL = typeof body.baseURL === 'string' ? body.baseURL.trim().replace(/\/+$/, '') : ''
-        const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''
-        if (baseURL.length === 0 || apiKey.length === 0) {
-          return json(res, 400, { error: 'baseURL and apiKey are required' })
+        const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
+        if (baseURL.length === 0) return json(res, 400, { error: 'baseURL is required' })
+        let apiKey: string
+        try {
+          apiKey = await resolveProbeKey(ctx, routes, provider, typeof body.apiKey === 'string' ? body.apiKey.trim() : '')
+        } catch (error) {
+          return json(res, 400, { error: safeMessage(error) })
         }
         const response = await fetch(`${baseURL}/usage`, {
           method: 'GET',

@@ -12,6 +12,8 @@ Sub2API is an AI API gateway that turns subscription quota into OpenAI-compatibl
 - **Reasoning effort (thinking mode)**: `reasoning_effort` is passed straight through to the gateway and adjustable right in the chat model selector; the settings page's per-model "reasoning strength" column fills each model's real levels from [models.dev](https://models.dev/) `reasoning_options` (e.g. `gpt-5.6-sol` → none/low/medium/high/xhigh/max, `deepseek-v4-flash` → low/high/max), with editable levels and an explicit opt-out.
 - **Usage lookup**: "view usage" calls `GET {baseURL}/usage` and summarizes quota, balance, rate limits, and subscription windows.
 - **Standards-based config**: base URL and model catalogs live in the `llm-sub2api:` settings section (`$DSH_HOME/settings.yaml`, written by the web Models page); keys go through the harness credential store.
+- **Global vision / image tools**: `analyze_image` and `generate_image` stay available even when the current chat model cannot see or create images. They call a dedicated vision or image model configured on the settings page, and return a description or a workspace file path rather than injecting image blocks into a text-only session.
+- **Auto Vision wrapper**: image capability for text-only models. Every registered text-only provider route gets a same-name twin (`<route>-vision`, shown as "… + 自动识图") — our own `sub2api-*` routes **and external providers** (official `deepseek-official`, `llm-pi-ai`, routes added by other plugins). Twin models carry a **`-vision` id/name suffix** (e.g. `deepseek-v4-flash-vision`) so the picker shows at a glance which models accept images; the suffix is stripped again when the call is delegated back to the base route. The twin's catalog declares `inputModalities: ['text', 'image']` so the harness attachment admission passes, and the twin's stream rewrites image blocks into vision-model transcriptions (via the configured `tools.analyze` model, cached per attachment) before delegating the text-only turn to the original route's adapter. DeepSeek stays the brain; the vision model is only the eyes. Twins follow `llm/adapters-updated` and skip names already taken by other plugins. Disable with `autoVision: false`.
 - **Provider icons** from [lobehub/lobe-icons](https://lobehub.com/icons), embedded as SVG in the settings page.
 
 ## Install
@@ -44,9 +46,52 @@ llm-sub2api:
       apiKeyEnv: SUB2API_GROK_API_KEY
     gemini:
       apiKeyEnv: SUB2API_GEMINI_API_KEY
+  tools:
+    analyze:
+      provider: openai
+      model: gpt-4o
+    generate:
+      provider: openai
+      model: gpt-image-1
 ```
 
 Store each key through the credentials service (the web Models page writes it, or export `SUB2API_OPENAI_API_KEY=…` etc.). A route activates only when its platform has a key; clear the key to drop the route again.
+
+### Wire protocol (automatic per group)
+
+The gateway serves each platform group upstream through its NATIVE protocol, and the adapter picks the endpoint automatically from the key's group — no configuration needed:
+
+| Group | Protocol used | Endpoint |
+|---|---|---|
+| openai | `openai-responses` | `POST {baseURL}/responses` |
+| claude | `anthropic-messages` | `POST {baseURL}/messages` |
+| grok / gemini | `openai-completions` | `POST {baseURL}/chat/completions` |
+
+Speaking the native protocol means the gateway never has to convert chat/completions — that conversion is what drops/misaligns tool-call names and ids for parallel calls (`unknown tool ""`, `missing required property …`). To force a different endpoint for a group whose gateway does not serve it natively, declare `api` on the provider in `$DSH_HOME/settings.yaml` (advanced; no settings-page control):
+
+```yaml
+llm-sub2api:
+  baseURL: http://localhost:8080/v1
+  providers:
+    openai:
+      apiKeyEnv: SUB2API_OPENAI_API_KEY
+      api: openai-completions   # optional: openai-completions / openai-responses / anthropic-messages
+      models:
+        - id: gpt-4o
+```
+
+`api` accepts `openai-completions` (`/chat/completions`), `openai-responses` (`/responses`), or `anthropic-messages` (`/messages`); omitted means the automatic group default above.
+
+### Image input & reasoning effort (auto-filled)
+
+Attaching an image to the session model requires that model to declare the `image` input modality — otherwise the harness refuses before sending ("model does not support images"). **Both fields are auto-filled from models.dev — no manual selection** (the model details panel shows the derived values read-only):
+
+- **Image input**: derived from models.dev `attachment` / `modalities.input` when present (e.g. gpt-5.6-luna → text+image, deepseek-v4-flash → text); otherwise guessed from the model id (`gpt-*`, `claude-*`, `gemini-*`, `grok-*`, `glm-*`, … default to text+image). Pin a model to text-only with `input: [text]` in `$DSH_HOME/settings.yaml`.
+- **Reasoning effort**: derived from models.dev `reasoning_options` when present (e.g. deepseek-v4-flash → high/max); otherwise the default low/medium/high, and models with `reasoning: false` are marked unsupported.
+
+When the model accepts images, the request carries the image in the group's native protocol: openai → Responses `input_image`, claude → Messages `image` (base64), grok/gemini → chat-completions `image_url`.
+
+Pick the dedicated vision / image models under **Settings → Sub2API 模型 → 全局图像工具**. Those two tools stay global: a text-only chat model can still call `analyze_image` (local file or URL) and `generate_image` (writes into the session workspace). Generation first tries `POST {baseURL}/images/generations`, then falls back to chat completions when the gateway has no images endpoint.
 
 ## Development
 
