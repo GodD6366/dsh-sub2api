@@ -8,4 +8,4 @@
 
 - insert:
     - id: llm-sub2api
-      name: dsh-sub2api
+      name: '@godd6366/dsh-sub2api'
