@@ -24,6 +24,7 @@ import {
   LlmError,
   ProviderRequestId,
   QUOTA_EXCEEDED_CODE,
+  ReasoningEffortId,
   assertUsableApiKey,
   attributionHeaders,
   contentHasImage,
@@ -34,6 +35,8 @@ import type {
   ContentBlock,
   GenerateOptions,
   LlmModelInfo,
+  LlmModelReasoningInfo,
+  LlmReasoningEffortInfo,
   LlmProviderInfo,
   LlmResolvedModelInfo,
   Message,
@@ -56,6 +59,59 @@ export const DEFAULT_CONTEXT_WINDOW = 128000
 export const DEFAULT_MAX_TOKENS = 8192
 /** Maximum provider idle time while one stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
+
+/**
+ * Reasoning effort levels exposed for reasoning-capable models. The gateway
+ * speaks the OpenAI chat-completions protocol, so the ids are the OpenAI
+ * `reasoning_effort` vocabulary and are sent through verbatim. Per-model
+ * configuration (filled from models.dev `reasoning_options`) may expose
+ * additional vocabulary such as `none`, `xhigh`, or `max`.
+ */
+export const REASONING_EFFORTS: readonly { id: ReasoningEffortId; name: string }[] = [
+  { id: ReasoningEffortId('low'), name: 'Low' },
+  { id: ReasoningEffortId('medium'), name: 'Medium' },
+  { id: ReasoningEffortId('high'), name: 'High' },
+]
+
+/** Display names for effort ids beyond the default low/medium/high vocabulary. */
+const EFFORT_NAMES: Record<string, string> = {
+  none: 'None',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+}
+
+function effortName(id: string): string {
+  return EFFORT_NAMES[id] ?? (id.length > 0 ? id.charAt(0).toUpperCase() + id.slice(1) : id)
+}
+
+/**
+ * Reasoning metadata for one exact route/model, or undefined when the model
+ * must not expose a reasoning-effort control. Every sub2api route speaks the
+ * OpenAI chat-completions protocol against the same gateway, so `reasoning_effort`
+ * applies to every provider by default — the provider route alone never hides
+ * the control. An explicit per-model setting wins: an empty `reasoningEfforts`
+ * opts the model out, a non-empty list exposes exactly those levels (verbatim,
+ * so models.dev vocabularies like `xhigh`/`max`/`none` survive). Image models
+ * are not chat reasoning models.
+ */
+function reasoningInfo(_provider: string, modelId: string, configured?: CatalogModel): LlmModelReasoningInfo | undefined {
+  if (configured?.reasoningEfforts !== undefined) {
+    if (configured.reasoningEfforts.length === 0) return undefined
+    const seen = new Set<string>()
+    const efforts: LlmReasoningEffortInfo[] = []
+    for (const id of configured.reasoningEfforts) {
+      if (typeof id !== 'string' || id.length === 0 || seen.has(id)) continue
+      seen.add(id)
+      efforts.push({ id: ReasoningEffortId(id), name: effortName(id) })
+    }
+    return efforts.length > 0 ? { efforts } : undefined
+  }
+  if (/image/i.test(modelId)) return undefined
+  return { efforts: REASONING_EFFORTS }
+}
 
 export type ProviderKey = 'openai' | 'claude' | 'grok' | 'gemini'
 
@@ -83,6 +139,14 @@ export interface CatalogModel {
   contextWindow?: number
   /** Maximum output tokens. */
   maxTokens?: number
+  /**
+   * Reasoning effort levels selectable for this model. Absent: every non-image
+   * model on any route exposes low/medium/high (the gateway is OpenAI-compatible
+   * on all routes). Empty array: reasoning effort is explicitly off for this
+   * model. Non-empty: exposes exactly those levels verbatim (e.g. models.dev
+   * vocabularies such as `xhigh`/`max`/`none`).
+   */
+  reasoningEfforts?: string[]
 }
 
 export interface ProviderProfile {
@@ -104,6 +168,13 @@ const catalogModel = z.object({
   name: z.string(),
   contextWindow: z.number().step(1).min(1),
   maxTokens: z.number().step(1).min(1),
+  // The settings layer normalizes every section through this schema, and an
+  // absent optional array would otherwise be filled with an empty array —
+  // silently turning reasoning off for every unconfigured model. Default the
+  // field to the full OpenAI effort vocabulary so a model without explicit
+  // configuration exposes low/medium/high (image models are excluded at
+  // resolve time); an explicit empty array still opts the model out.
+  reasoningEfforts: z.array(z.string()).default(REASONING_EFFORTS.map((effort) => effort.id)),
 })
 
 const providerProfile = z.object({
@@ -227,6 +298,7 @@ function serializeRequest(options: GenerateOptions): Record<string, unknown> {
     stream: true,
     stream_options: { include_usage: true },
     ...(tools !== undefined && tools.length > 0 ? { tools } : {}),
+    ...(options.reasoningEffort !== undefined ? { reasoning_effort: options.reasoningEffort } : {}),
     ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
     ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
     ...(options.stop !== undefined ? { stop: options.stop } : {}),
@@ -306,6 +378,7 @@ export class Sub2ApiAdapter extends LlmAdapter {
     const def = providerDef(provider)
     const profile = def !== undefined ? this.config.options().providers[def.key] : undefined
     const found = profile?.models?.find((m) => m.id === model)
+    const reasoning = reasoningInfo(provider, model, found)
     return {
       provider,
       id: model,
@@ -313,6 +386,7 @@ export class Sub2ApiAdapter extends LlmAdapter {
       inputModalities: ['text' as const],
       context: { contextWindow: found?.contextWindow ?? DEFAULT_CONTEXT_WINDOW },
       defaultMaxTokens: found?.maxTokens ?? DEFAULT_MAX_TOKENS,
+      ...(reasoning !== undefined ? { reasoning } : {}),
     }
   }
 
@@ -449,8 +523,16 @@ export class Sub2ApiAdapter extends LlmAdapter {
             open('tool-call', block)
             yield { type: 'block-start', index: block.index, blockType: 'tool-call' }
           }
-          if (call.id !== undefined) block.callId = call.id
-          if (call.function?.name !== undefined) block.name = call.function.name
+          // OpenAI-compatible streams send `id`/`function.name` only on the
+          // first delta of a tool call; later deltas may carry them as empty
+          // strings or null. Capture each field once, from the first non-empty
+          // value, so a later empty/null delta cannot clobber it.
+          if (typeof call.id === 'string' && call.id.length > 0 && block.callId === undefined) block.callId = call.id
+          if (
+            typeof call.function?.name === 'string'
+            && call.function.name.length > 0
+            && block.name === undefined
+          ) block.name = call.function.name
           const fragment = call.function?.arguments ?? ''
           block.text += fragment
           yield {
@@ -539,14 +621,35 @@ function resolveProfiles(config: Config) {
 }
 
 function resolveAdapterOptions(config: Config) {
-  const baseURL = config.baseURL.trim().replace(/\/+$/, '')
-  if (baseURL.length === 0) throw new Error('llm-sub2api: baseURL is required')
-  if (!/^https?:\/\//.test(baseURL)) throw new Error('llm-sub2api: baseURL must start with http(s)://')
+  const baseURL = (config.baseURL ?? '').trim().replace(/\/+$/, '')
+  // An empty baseURL means "not configured yet": boot dormant and let the
+  // settings scope (or setConfig) supply the URL later. Only validate the
+  // scheme once a URL is actually present.
+  if (baseURL.length > 0 && !/^https?:\/\//.test(baseURL)) {
+    throw new Error('llm-sub2api: baseURL must start with http(s)://')
+  }
   return { baseURL, profiles: resolveProfiles(config) }
 }
 
+const EMPTY_PROVIDER: ProviderProfile = {}
+
+/** Provider map used until settings (or setConfig) provide real values. */
+function defaultProviders(): Record<ProviderKey, ProviderProfile> {
+  return { openai: EMPTY_PROVIDER, claude: EMPTY_PROVIDER, grok: EMPTY_PROVIDER, gemini: EMPTY_PROVIDER }
+}
+
 export function apply(ctx: Context, config: Config): void {
-  let current = (): Config => config
+  // The loader may start this plugin before any `llm-sub2api:` settings exist,
+  // so normalize an empty/undefined config into a dormant boot: no baseURL and
+  // no provider profiles yet. The settings scope replaces `current` wholesale
+  // once the harness settings service is available.
+  let current = (): Config => {
+    const raw = config ?? {}
+    return {
+      baseURL: raw.baseURL ?? '',
+      providers: { ...defaultProviders(), ...(raw.providers ?? {}) },
+    }
+  }
   const options = () => {
     const raw = current()
     return { ...raw, ...resolveAdapterOptions(raw) }
@@ -605,12 +708,20 @@ export function apply(ctx: Context, config: Config): void {
   // Settings-page HTTP bridge: read/write config, discover models, query usage.
   registerRoutes(ctx, {
     config: () => current(),
-    setConfig: (next) => {
-      // Mutate in place so the settings scope (and its watchers) see the change.
-      const raw = current()
-      raw.baseURL = next.baseURL
-      for (const def of PROVIDERS) {
-        raw.providers[def.key] = next.providers[def.key]
+    setConfig: async (next) => {
+      // The settings snapshot is handed out frozen (immutable), so never mutate
+      // it. Persist through the settings service; its commit swaps the resolved
+      // value and re-notifies, and we re-run ensureRegistration below so the
+      // response reports the routes that just activated. Without a settings
+      // service, fall back to an in-memory source.
+      const settings = ctx.get('settings')
+      if (settings !== undefined) {
+        await settings.replace(NS, next)
+      } else {
+        current = () => ({
+          baseURL: next.baseURL ?? '',
+          providers: { ...defaultProviders(), ...next.providers },
+        })
       }
       ensureRegistration()
     },
@@ -632,4 +743,9 @@ export function apply(ctx: Context, config: Config): void {
   })
 }
 
-export { Config as default }
+// NOTE: no default export. The harness loader (cordis-plugin-loader
+// unwrapExports) treats a module's default export as the plugin entry;
+// `Config` here is the settings schema, so exporting it as default makes the
+// loader boot the schema as the plugin and fails with
+// "cannot get property \"baseURL\" without inject".
+// The schema is already passed to installSettingsSection explicitly.

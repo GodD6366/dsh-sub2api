@@ -3,7 +3,9 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const lib = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib')
-const filename = ['client.js', 'client.cjs']
+// tsdown emits CommonJS as client.cjs in this ESM package. Prefer that fresh
+// build over a client.js left behind by an earlier wrapper run.
+const filename = ['client.cjs', 'client.js']
   .map(name => join(lib, name))
   .find(path => {
     try {

@@ -9,6 +9,7 @@ Sub2API is an AI API gateway that turns subscription quota into OpenAI-compatibl
 - **One base URL, four provider routes**: `sub2api-openai`, `sub2api-claude`, `sub2api-grok`, `sub2api-gemini` — each configured with its own key, registered as a live LLM provider the moment the key is set.
 - **Streaming chat**: full SSE streaming, tool calls (`tool_calls`), reasoning deltas, and token usage — all mapped to the harness `StreamChunk` protocol.
 - **Model discovery**: one-click "fetch models" calls `GET {baseURL}/models` with the key, so each route's catalog matches exactly what the sub2api group serves.
+- **Reasoning effort (thinking mode)**: `reasoning_effort` is passed straight through to the gateway and adjustable right in the chat model selector; the settings page's per-model "reasoning strength" column fills each model's real levels from [models.dev](https://models.dev/) `reasoning_options` (e.g. `gpt-5.6-sol` → none/low/medium/high/xhigh/max, `deepseek-v4-flash` → low/high/max), with editable levels and an explicit opt-out.
 - **Usage lookup**: "view usage" calls `GET {baseURL}/usage` and summarizes quota, balance, rate limits, and subscription windows.
 - **Standards-based config**: base URL and model catalogs live in the `llm-sub2api:` settings section (`$DSH_HOME/settings.yaml`, written by the web Models page); keys go through the harness credential store.
 - **Provider icons** from [lobehub/lobe-icons](https://lobehub.com/icons), embedded as SVG in the settings page.

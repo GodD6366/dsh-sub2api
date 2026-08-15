@@ -9,6 +9,8 @@ sub2api 是一个把订阅配额转成 OpenAI 兼容 API 的网关。它的模�
 - **一个 baseURL，四个供应商路由**：`sub2api-openai`、`sub2api-claude`、`sub2api-grok`、`sub2api-gemini`——各自配置独立 key，填好 key 即注册为可用的 LLM 供应商。
 - **流式对话**：完整支持 SSE 流式、工具调用（tool_calls）、reasoning 增量与 token 用量，全部映射到 harness 的 `StreamChunk` 协议。
 - **模型发现**：一键「获取模型」调用 `GET {baseURL}/models`（携带该 key），每个路由的模型目录与 sub2api 分组实际提供的完全一致。
+- **正式模型参数**：设置页按模型 ID 从 [models.dev](https://models.dev/) 自动补全名称、Context Window 与最大输出长度；匹配不到的字段保持为空，可手动填写。
+- **推理等级（思考模式）**：对话模型选择器可直接调整 `reasoning_effort`（透传网关）；设置页「思考强度」列按 [models.dev](https://models.dev/) 的 `reasoning_options` 逐模型填充真实档位（如 `gpt-5.6-sol` 为 none/low/medium/high/xhigh/max，`deepseek-v4-flash` 为 low/high/max），可手动增删档位或显式关闭。
 - **用量查询**：「查看用量」调用 `GET {baseURL}/usage`，汇总配额、余额、限流窗口与订阅周期用量。
 - **标准配置**：baseURL 与模型目录存于 `llm-sub2api:` 设置节（`$DSH_HOME/settings.yaml`，web 模型页可直接写入）；key 走 harness 凭据存储。
 - **供应商图标**来自 [lobehub/lobe-icons](https://lobehub.com/icons)，以 SVG 内嵌在设置页中。
@@ -37,6 +39,9 @@ llm-sub2api:
       apiKeyEnv: SUB2API_OPENAI_API_KEY
       models:
         - id: gpt-4o
+          name: GPT-4o
+          contextWindow: 128000
+          maxTokens: 16384
     claude:
       apiKeyEnv: SUB2API_CLAUDE_API_KEY
     grok:

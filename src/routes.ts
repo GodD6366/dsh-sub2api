@@ -16,7 +16,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { PROVIDERS, type Config } from './index.ts'
+import { PROVIDERS, type CatalogModel, type Config } from './index.ts'
 
 export const ROUTES = {
   get: '/plugins/dsh-sub2api/config',
@@ -28,7 +28,8 @@ export const ROUTES = {
 
 export interface ConfigPayload {
   baseURL: string
-  providers: Record<string, { keyConfigured: boolean; models: string[] }>
+  catalogFormat: 'structured-v1'
+  providers: Record<string, { keyConfigured: boolean; models: CatalogModel[] }>
 }
 
 function trustedRequest(req: IncomingMessage): boolean {
@@ -82,10 +83,59 @@ function readProviderConfig(config: Config): ConfigPayload {
     const profile = config.providers[def.key]
     providers[def.key] = {
       keyConfigured: profile.apiKeyEnv !== undefined,
-      models: profile.models?.map((m) => m.id) ?? [],
+      models: profile.models?.map((model) => ({ ...model })) ?? [],
     }
   }
-  return { baseURL: config.baseURL, providers }
+  return { baseURL: config.baseURL, catalogFormat: 'structured-v1', providers }
+}
+
+function legacyCatalogModel(value: string): CatalogModel | undefined {
+  const [rawId = '', rawName = '', rawContextWindow = ''] = value.split('|')
+  const id = rawId.trim()
+  if (id.length === 0) return undefined
+  const name = rawName.trim()
+  const parsedContextWindow = Number(rawContextWindow.trim())
+  const contextWindow = Number.isSafeInteger(parsedContextWindow) && parsedContextWindow > 0
+    ? parsedContextWindow
+    : undefined
+  return {
+    id,
+    ...(name.length > 0 ? { name } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+  }
+}
+
+function structuredCatalogModel(value: unknown): CatalogModel | undefined {
+  if (typeof value === 'string') return legacyCatalogModel(value)
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const raw = value as Record<string, unknown>
+  const id = typeof raw.id === 'string' ? raw.id.trim() : ''
+  if (id.length === 0) return undefined
+  const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+  const contextWindow = typeof raw.contextWindow === 'number' && Number.isSafeInteger(raw.contextWindow) && raw.contextWindow > 0
+    ? raw.contextWindow
+    : undefined
+  const maxTokens = typeof raw.maxTokens === 'number' && Number.isSafeInteger(raw.maxTokens) && raw.maxTokens > 0
+    ? raw.maxTokens
+    : undefined
+  const reasoningEfforts = Array.isArray(raw.reasoningEfforts)
+    ? (raw.reasoningEfforts as unknown[]).filter((effort): effort is string => typeof effort === 'string' && effort.length > 0)
+    : undefined
+  return {
+    id,
+    ...(name.length > 0 ? { name } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+  }
+}
+
+function readCatalogModels(value: unknown, fallback: CatalogModel[]): CatalogModel[] {
+  if (Array.isArray(value)) return value.map(structuredCatalogModel).filter((model) => model !== undefined)
+  if (typeof value === 'string') {
+    return value.split(/[\n,]/).map(legacyCatalogModel).filter((model) => model !== undefined)
+  }
+  return fallback
 }
 
 function providerCredentialRef(platform: string): CredentialRef {
@@ -94,7 +144,7 @@ function providerCredentialRef(platform: string): CredentialRef {
 
 interface RouteContext {
   config: () => Config
-  setConfig: (config: Config) => void
+  setConfig: (config: Config) => void | Promise<void>
   listRegisteredRoutes: () => string[]
 }
 
@@ -104,25 +154,37 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
       webCtx.webServer.register({ kind: 'exact', path, handler })
     }
 
-    // GET config: redacted view for the settings page.
+    // GET/POST config share one pathname. The webserver routes by path only and
+    // rejects duplicate paths, so a single handler dispatches on the method.
     register(ROUTES.get, async (req, res) => {
-      if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' })
+      if (req.method !== 'GET' && req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
       if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
-      json(res, 200, readProviderConfig(routes.config()))
-    })
 
-    // POST config: persist baseURL + per-platform models; keys go to credentials.
-    register(ROUTES.set, async (req, res) => {
-      if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
-      if (!trustedRequest(req)) return json(res, 403, { error: 'forbidden' })
+      // GET config: redacted view for the settings page.
+      if (req.method === 'GET') {
+        json(res, 200, readProviderConfig(routes.config()))
+        return
+      }
+
+      // POST config: persist baseURL + per-platform models; keys go to credentials.
       try {
         const body = await readJson(req)
         const baseURL = typeof body.baseURL === 'string' ? body.baseURL.trim().replace(/\/+$/, '') : ''
         if (baseURL.length === 0) return json(res, 400, { error: 'baseURL is required' })
         if (!/^https?:\/\//.test(baseURL)) return json(res, 400, { error: 'baseURL must start with http(s)://' })
 
-        const next = routes.config()
-        next.baseURL = baseURL
+        // Build a fresh config instead of mutating: the settings snapshot is
+        // frozen (handed out immutably by the settings service).
+        const current = routes.config()
+        const next: Config = {
+          baseURL,
+          providers: {
+            openai: { ...current.providers.openai },
+            claude: { ...current.providers.claude },
+            grok: { ...current.providers.grok },
+            gemini: { ...current.providers.gemini },
+          },
+        }
 
         const rawProviders = typeof body.providers === 'object' && body.providers !== null
           ? body.providers as Record<string, unknown>
@@ -139,15 +201,10 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
           } else if (apiKey.length > 0 && credentials === undefined) {
             profile.apiKeyEnv = providerCredentialRef(def.key)
           }
-          const models = Array.isArray(raw?.models)
-            ? (raw.models as unknown[]).map((m) => ({ id: String(m) }))
-            : typeof raw?.models === 'string'
-              ? raw.models.split(/[\n,]/).map((s: string) => s.trim()).filter((s: string) => s.length > 0).map((id: string) => ({ id }))
-              : profile.models ?? []
-          profile.models = models
+          profile.models = readCatalogModels(raw?.models, profile.models ?? [])
         }
 
-        routes.setConfig(next)
+        await routes.setConfig(next)
         json(res, 200, { ok: true, ...readProviderConfig(next), routes: routes.listRegisteredRoutes() })
       } catch (error) {
         json(res, 500, { error: safeMessage(error) })
