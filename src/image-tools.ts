@@ -876,6 +876,23 @@ export function registerImageTools(ctx: Context, host: ImageToolHost): void {
           ...(args.file_path !== undefined ? { locations: [{ path: args.file_path }] } : {}),
         }
       },
+      presentResult(_args, result) {
+        // Show only the image in the UI; the XML text block is for the model and
+        // stays in the model-facing content unchanged.
+        const imageBlock = result.content.find((b) => b.type === 'image')
+        if (imageBlock !== undefined) {
+          return { card: 'generic' as const, content: [imageBlock] }
+        }
+        // No attachment (read-only install fallback): show just the path line.
+        const textBlock = result.content.find((b) => b.type === 'text')
+        if (textBlock !== undefined && textBlock.type === 'text') {
+          const pathLine = textBlock.text.match(/<path>(.*?)<\/path>/)?.[1]
+          if (pathLine !== undefined) {
+            return { card: 'generic' as const, content: [{ type: 'text', text: pathLine }] }
+          }
+        }
+        return undefined
+      },
     }))
   })
 }

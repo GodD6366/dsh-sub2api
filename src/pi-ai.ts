@@ -63,6 +63,16 @@ export interface PiAiProviderProfile {
   defaultContextWindow?: number
   defaultMaxTokens?: number
   defaultInput?: Array<'text' | 'image'>
+  retryPolicy?: {
+    mode: 'normal' | 'always'
+    maxRetries?: number
+    retryableCodes?: string[]
+    backoff?: {
+      initialDelayMs?: number
+      maxDelayMs?: number
+      jitterRatio?: number
+    }
+  }
 }
 
 /** The llm-pi-ai settings section value this plugin writes. */
@@ -145,6 +155,16 @@ function translateProfile(key: ProviderKey, profile: ProviderProfile, baseURL: s
     defaultContextWindow: DEFAULT_CONTEXT_WINDOW,
     defaultMaxTokens: DEFAULT_MAX_TOKENS,
     defaultInput: ['text'],
+    // Sub2api acts as a proxy to upstream providers that may enforce their own
+    // rate limits (HTTP 429). The default normal policy (2 retries, max 10s)
+    // is too short for upstream throttling windows; raise to 5 retries / 120s
+    // so transient rate limits resolve before the agent gives up.
+    retryPolicy: {
+      mode: 'normal',
+      maxRetries: 5,
+      retryableCodes: ['RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT', 'EMPTY_RESPONSE'],
+      backoff: { initialDelayMs: 1000, maxDelayMs: 120000, jitterRatio: 0.2 },
+    },
   }
 }
 
