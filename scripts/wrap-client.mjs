@@ -2,7 +2,9 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const lib = join(dirname(fileURLToPath(import.meta.url)), '..', 'lib')
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+const lib = join(root, 'lib')
+const { name: pkgName } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 // tsdown emits CommonJS as client.cjs in this ESM package. Prefer that fresh
 // build over a client.js left behind by an earlier wrapper run.
 const filename = ['client.cjs', 'client.js']
@@ -24,7 +26,7 @@ if (source.includes('window.__ModuleLoader__')) {
 }
 
 writeFileSync(out, `window.__ModuleLoader__.load({
-	id: "dsh-sub2api",
+	id: "${pkgName}",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
