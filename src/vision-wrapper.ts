@@ -200,6 +200,31 @@ function imageTurnQuestion(messages: readonly Message[]): string {
 }
 
 /**
+ * Drop pi-ai replay state before a twin delegates history to its base route.
+ *
+ * The twin forwards the text-only turn with `provider = baseRoute`, so the
+ * base adapter (pi-ai for sub2api groups) stamps its replay state with the
+ * *base* provider/model. The harness, however, records the assistant message
+ * under the *twin* route — and because the twin owns that route, the harness
+ * keeps the replay state on the next request. Replaying it then fails pi-ai's
+ * `provider does not match assistant source` check (INVALID_REPLAY_STATE).
+ * The twin cannot rewrite pi-ai's opaque, versioned replay state, so it is
+ * dropped and the base adapter treats the twin's history as foreign — correct
+ * for every base adapter, at the cost of losing provider-native replay on
+ * twin conversations.
+ */
+export function neutralizeReplayState(message: Message): Message {
+  const source = message.source
+  if (message.role !== 'assistant' || source.kind !== 'model' || source.replayState === undefined) {
+    return message
+  }
+  return {
+    ...message,
+    source: { kind: 'model', provider: source.provider, model: source.model },
+  }
+}
+
+/**
  * Image-capable twin adapter for one (or several) base routes — own sub2api
  * routes and external provider routes alike.
  *
@@ -282,7 +307,7 @@ export class Sub2ApiVisionAdapter extends LlmAdapter {
 
   override async *stream(options: GenerateOptions): AsyncGenerator<StreamChunk> {
     const baseRoute = this.baseRouteOf(options.provider)
-    const messages = await this.rewriteImages(options)
+    const messages = (await this.rewriteImages(options)).map(neutralizeReplayState)
     yield* this.baseOf(options.provider).stream({
       ...options,
       provider: baseRoute,

@@ -73,6 +73,8 @@ llm-sub2api:
 
 只在镜像路由上包装**纯文本模型**；原生多模态模型（如 `gpt-5.6-luna`）仍保留基础路由的原生图片输入。若想关闭镜像路由，在 `settings.yaml` 中设置：
 
+> 镜像委托给基础路由（pi-ai）前会剥离 assistant 消息的 pi-ai 回放状态（`replayState`）：镜像路由名与回放状态戳里的基础路由 provider 不一致，不剥离会触发 pi-ai 的 `invalid pi-ai replay state: provider does not match assistant source`（`INVALID_REPLAY_STATE`）。镜像会话因此不享受 pi-ai 的原生回放优化，这是有意取舍。
+
 ```yaml
 llm-sub2api:
   autoVision: false
@@ -109,7 +111,7 @@ llm-sub2api:
 
 本插件不再自己实现 LLM 协议层：四个 `sub2api-*` 路由由 `dsh-llm-pi-ai`（dsh-base 内置、dormant 挂载）通过 `llm-pi-ai:` settings profiles 承载。插件在每次 `llm-sub2api:` 配置变化（及启动）时把裸主机 baseURL、各组模型与 key 引用翻译成 hand-declared profiles 写入 `llm-pi-ai:`，路由即时注册 / 撤销。设置页、模型发现（`GET /v1/models`）、用量查询（`GET /v1/usage`）、识图 / 生图工具与 Auto Vision 镜像仍由本插件提供。
 
-> **依赖**：当前 bundled `@earendil-works/pi-ai`（0.82.x）在历史包含 assistant 消息时会无条件读 `assistant.usage.totalTokens`，而 harness 重建的历史消息不带 usage 字段，多轮对话会抛 `Cannot read properties of undefined (reading 'totalTokens')`。已在 dsh 安装目录的 `node_modules/@earendil-works/pi-ai/dist/utils/estimate.js` 打最小守卫补丁（`assistant.usage !== undefined` 才计入前缀 token）；升级 dsh 后若补丁被覆盖，需要重新应用。
+> **依赖（pi-ai 多轮崩溃，归因：dsh-llm-pi-ai 违反 pi-ai 契约）**：pi-ai 的 `AssistantMessage.usage` 是必填字段，其前缀 token 估算会解引用它；而 dsh 自带的 `dsh-llm-pi-ai` 重建 harness 历史 assistant 消息时**不带 usage**（harness 的 `Message` 类型本来就没有 usage），导致多轮对话抛 `Cannot read properties of undefined (reading 'totalTokens')`。根修在 dsh-llm-pi-ai（挂零 usage）；**本插件启动时会给 dsh 安装目录的 `@earendil-works/pi-ai/dist/utils/estimate.js` 打防御性守卫**（`assistant.usage !== undefined` 才计入前缀 token），幂等、升级 dsh 后自动重打，全新安装开箱即用；只读安装失败时手动执行 `node scripts/patch-pi-ai.mjs`。
 
 ### 图片输入 / 思考强度（自动补全）
 

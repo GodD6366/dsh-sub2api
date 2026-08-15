@@ -41,6 +41,7 @@ import { registerRoutes } from './routes.ts'
 import { registerImageTools } from './image-tools.ts'
 import { Sub2ApiVisionAdapter, visionRouteOf, VISION_ROUTE_SUFFIX } from './vision-wrapper.ts'
 import { syncPiAiProfiles } from './pi-ai.ts'
+import { applyPiAiMultiTurnPatch } from './pi-ai-patch.ts'
 
 export {
   Sub2ApiVisionAdapter,
@@ -50,6 +51,7 @@ export {
   visionRouteOf,
   baseRouteOf,
   stripVisionModel,
+  neutralizeReplayState,
 } from './vision-wrapper.ts'
 export { describeViaVisionModel } from './image-tools.ts'
 export {
@@ -61,6 +63,7 @@ export {
   type PiAiProviderProfile,
   type PiAiSettingsSection,
 } from './pi-ai.ts'
+export { applyPiAiMultiTurnPatch, type PiAiPatchResult } from './pi-ai-patch.ts'
 
 export const name = 'llm-sub2api'
 export const inject: string[] = ['llm', 'settings', 'credentials']
@@ -322,6 +325,15 @@ export function apply(ctx: Context, config: Config): void {
     return { ...raw, ...resolveAdapterOptions(raw) }
   }
   options()
+
+  // Best-effort guard for the bundled pi-ai multi-turn defect. pi-ai modules
+  // are lazy-loaded, so this runs well before any request imports estimate.js.
+  const patchResult = applyPiAiMultiTurnPatch()
+  if (patchResult.kind === 'patched') {
+    ctx.logger.info(`llm-sub2api: applied pi-ai multi-turn guard to ${patchResult.file}`)
+  } else if (patchResult.kind === 'skipped') {
+    ctx.logger.warn(`llm-sub2api: pi-ai multi-turn guard not applied — ${patchResult.reason}`)
+  }
 
   const resolveApiKey = async (route: string, profile: ProviderProfile) => {
     if (profile.apiKeyEnv === undefined) {
