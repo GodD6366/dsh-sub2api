@@ -32,6 +32,7 @@ import {
   apiProtocolForKey,
   gatewayAnthropicRoot,
   gatewayApiRoot,
+  resolveProviderEndpoints,
 } from './index.ts'
 
 /** The settings namespace owned by dsh-llm-pi-ai. */
@@ -132,23 +133,31 @@ function translateModel(model: CatalogModel): PiAiModelProfile {
 }
 
 /**
- * Translate one sub2api group into a hand-declared llm-pi-ai provider profile.
- * `apiKeyEnv` passes through verbatim (the harness resolves it per request
- * through `ctx.credentials`); routes without a key are skipped by the caller.
+ * Translate one registered endpoint into a hand-declared llm-pi-ai provider
+ * profile. `apiKeyEnv` passes through verbatim (the harness resolves it per
+ * request through `ctx.credentials`); routes without a key are skipped by the
+ * caller.
  *
  * The settings store the bare gateway host; the protocols join it differently.
  * OpenAI-compatible SDKs append their endpoint to the `/v1` API root, while
  * `@anthropic-ai/sdk` treats the given URL as the bare host and appends
  * `/v1/messages` itself — so OpenAI-style routes get the `/v1`-rooted URL and
- * the anthropic route gets the bare host.
+ * the anthropic route gets the bare host. An endpoint may override the global
+ * `baseURL` entirely (e.g. a second key pointing at another sub2api server).
  */
-function translateProfile(key: ProviderKey, profile: ProviderProfile, baseURL: string, label: string): PiAiProviderProfile {
+function translateProfile(
+  key: ProviderKey,
+  profile: ProviderProfile,
+  baseURL: string,
+  label: string,
+): PiAiProviderProfile {
   const api = apiProtocolForKey(key, profile)
+  const endpointBase = profile.baseURL?.trim() || baseURL
   return {
     ...(profile.apiKeyEnv !== undefined ? { apiKeyEnv: profile.apiKeyEnv } : {}),
     displayName: `Sub2API ${label}`,
     api,
-    baseURL: api === 'anthropic-messages' ? gatewayAnthropicRoot(baseURL) : gatewayApiRoot(baseURL),
+    baseURL: api === 'anthropic-messages' ? gatewayAnthropicRoot(endpointBase) : gatewayApiRoot(endpointBase),
     models: (profile.models ?? []).map(translateModel),
     // Route-level fallbacks mirror the plugin's old adapter defaults, so a
     // catalog entry that omits a size keeps sizing like before.
@@ -170,9 +179,11 @@ function translateProfile(key: ProviderKey, profile: ProviderProfile, baseURL: s
 
 /**
  * Build the `llm-pi-ai` provider profile dict for every configured sub2api
- * group. A group is emitted only when it has both a key and at least one
- * model — a hand-declared pi-ai route needs a non-empty `models` list, and a
- * keyless group would otherwise surface as an unauthenticated route.
+ * group. Each group expands into one route per keyed endpoint (the legacy
+ * top-level key first, then every named `endpoints[]` entry); an endpoint is
+ * emitted only when it has both a key and at least one model — a hand-declared
+ * pi-ai route needs a non-empty `models` list, and a keyless endpoint would
+ * otherwise surface as an unauthenticated route.
  */
 export function translateToPiAi(config: Config): Record<string, PiAiProviderProfile> {
   const baseURL = (config.baseURL ?? '').trim().replace(/\/+$/, '')
@@ -180,10 +191,20 @@ export function translateToPiAi(config: Config): Record<string, PiAiProviderProf
   const profiles: Record<string, PiAiProviderProfile> = {}
   for (const def of PROVIDERS) {
     const profile = config.providers[def.key]
-    if (profile.apiKeyEnv === undefined) continue
-    const models = (profile.models ?? []).filter((model) => model.id.length > 0)
-    if (models.length === 0) continue
-    profiles[def.route] = translateProfile(def.key, { ...profile, models }, baseURL, def.label)
+    const endpoints = resolveProviderEndpoints(def.key, profile)
+    for (const endpoint of endpoints) {
+      const models = (endpoint.profile.models ?? []).filter((model) => model.id.length > 0)
+      if (models.length === 0) continue
+      // With several keyed endpoints per platform, tag each route's display
+      // name so model pickers can tell them apart.
+      const suffix = endpoints.length > 1 ? ` (${endpoint.name})` : ''
+      profiles[endpoint.route] = translateProfile(
+        def.key,
+        { ...endpoint.profile, models },
+        baseURL,
+        `${def.label}${suffix}`,
+      )
+    }
   }
   return profiles
 }

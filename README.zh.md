@@ -9,6 +9,7 @@ sub2api 是一个把订阅配额转成 OpenAI 兼容 API 的网关。它的模�
 ## 功能
 
 - **一个 baseURL，四个供应商路由**：`sub2api-openai`、`sub2api-claude`、`sub2api-grok`、`sub2api-gemini`——各自配置独立 key，填好 key 即注册为可用的 LLM 供应商。
+- **同平台多端点**：每个平台可声明多个独立 key / 独立 baseURL 的端点（`endpoints[]`），各自注册为 `<路由>-<名称>` 的独立路由，设置页提供逐端点的编辑器与模型发现。
 - **流式对话（由 pi-ai 承载）**：SSE 流式、工具调用、reasoning 增量与 token 用量由 `dsh-llm-pi-ai` 映射到 harness 协议，天然正确处理 Responses API 的 `function_call` 顶层条目等 wire format 细节。
 - **模型发现**：一键「获取模型」调用 `GET {baseURL}/models`（携带该 key），每个路由的模型目录与 sub2api 分组实际提供的完全一致。
 - **正式模型参数**：设置页按模型 ID 从 [models.dev](https://models.dev/) 自动补全名称、Context Window 与最大输出长度；匹配不到的字段保持为空，可手动填写。
@@ -106,6 +107,33 @@ llm-sub2api:
 ```
 
 `api` 可选值：`openai-completions`（`/v1/chat/completions`）、`openai-responses`（`/v1/responses`）、`anthropic-messages`（`/v1/messages`）；省略 = 按上表自动。
+
+### 同平台多端点
+
+一个平台可以注册多条带独立 key 的路由——例如第二个 sub2api 服务器、备用分组，或专用的生图 key。在 `$DSH_HOME/settings.yaml` 中通过 `endpoints[]` 声明：
+
+```yaml
+llm-sub2api:
+  baseURL: http://localhost:8080
+  providers:
+    openai:
+      apiKeyEnv: SUB2API_OPENAI_API_KEY        # 路由：sub2api-openai
+      models:
+        - id: gpt-4o
+      endpoints:
+        - name: backup                          # 路由：sub2api-openai-backup
+          apiKeyEnv: SUB2API_OPENAI_BACKUP_API_KEY
+          models:
+            - id: gpt-5.6-sol
+        - name: other-host                      # 可以指向另一台网关
+          apiKeyEnv: SUB2API_OPENAI_OTHER_API_KEY
+          baseURL: http://10.0.0.5:8080
+          api: openai-completions               # 可选协议覆盖
+          models:
+            - id: gpt-4o-mini
+```
+
+规则：每个端点必须有独立的凭据引用和至少一个模型；`name` 仅允许 `[A-Za-z0-9_-]`，并作为路由后缀（`sub2api-openai-<名称>`）；端点的 `baseURL` 完全覆盖全局值；首个（旧式）key 继续占用裸平台路由。设置页在每个平台卡片内为每个端点渲染独立编辑器，包含各自的 key 输入、baseURL 覆盖、模型目录、「获取模型」与「查看用量」。全局识图 / 生图工具的模型引用可用 `openai#backup` 形式指定某个端点。
 
 ### 与 dsh-llm-pi-ai 的关系
 

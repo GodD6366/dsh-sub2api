@@ -108,6 +108,12 @@ const css = `
 .s2a_reasoningField{grid-column:1/-1}
 .s2a_modelEmpty{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-tertiary);margin:0;padding:16px 10px;text-align:center;font-size:12px;line-height:18px}
 .s2a_modelFooter{align-items:center;justify-content:space-between;gap:8px;display:flex}
+.s2a_endpoints{flex-direction:column;gap:10px;display:flex;margin-top:4px}
+.s2a_endpointCard{border:1px dashed var(--dsw-alias-border-l3);border-radius:8px;flex-direction:column;gap:10px;padding:10px 12px;display:flex;background:var(--dsw-alias-bg-layer-1)}
+.s2a_endpointHead{align-items:center;gap:8px;display:flex}
+.s2a_endpointName{color:var(--dsw-alias-label-secondary);font-size:12px;font-weight:500;line-height:18px}
+.s2a_endpointGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px 12px}
+.s2a_endpointActions{align-items:center;gap:4px;margin-left:auto;display:inline-flex}
 .s2a_modelSource{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .s2a_modelSource a{color:inherit;text-decoration:underline;text-underline-offset:2px}
 .s2a_actions{align-items:center;gap:8px;margin-top:4px;display:flex}
@@ -158,10 +164,22 @@ interface ModelRow {
 
 const DEFAULT_REASONING_LEVELS = ['low', 'medium', 'high']
 
+/** One named extra endpoint inside a provider card. */
+interface EndpointState {
+  rowId: number
+  name: string
+  baseURL: string
+  api: string
+  key: string
+  keyConfigured: boolean
+  models: ModelRow[]
+}
+
 interface ProviderState {
   key: string
   keyConfigured: boolean
   models: ModelRow[]
+  endpoints: EndpointState[]
 }
 
 interface ImageToolModelRef {
@@ -174,10 +192,21 @@ interface ImageToolsState {
   generate: ImageToolModelRef
 }
 
+interface EndpointPayload {
+  name: string
+  baseURL?: string
+  api?: string
+  models?: Array<CatalogModel | string>
+}
+
 interface ConfigState {
   baseURL: string
   catalogFormat?: 'structured-v1'
-  providers: Record<string, { keyConfigured: boolean; models: Array<CatalogModel | string> }>
+  providers: Record<string, {
+    keyConfigured: boolean
+    models: Array<CatalogModel | string>
+    endpoints?: EndpointPayload[]
+  }>
   tools?: {
     analyze?: ImageToolModelRef
     generate?: ImageToolModelRef
@@ -336,7 +365,11 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function emptyProvider(): ProviderState {
-  return { key: '', keyConfigured: false, models: [] }
+  return { key: '', keyConfigured: false, models: [], endpoints: [] }
+}
+
+function emptyEndpoint(): EndpointState {
+  return { rowId: nextRowId++, name: '', baseURL: '', api: '', key: '', keyConfigured: false, models: [] }
 }
 
 function emptyToolRef(): ImageToolModelRef {
@@ -356,19 +389,26 @@ function toolRefFromConfig(value: ImageToolModelRef | undefined): ImageToolModel
 
 function toolOptions(providers: Record<string, ProviderState>): Array<{ value: string; label: string; provider: string; model: string }> {
   const options: Array<{ value: string; label: string; provider: string; model: string }> = []
-  for (const def of PROVIDERS) {
-    const provider = providers[def.key]
-    if (provider === undefined) continue
-    for (const row of provider.models) {
+  const pushOption = (providerKey: string, label: string, models: ModelRow[]) => {
+    for (const row of models) {
       const id = row.id.trim()
       if (id.length === 0) continue
       const name = row.name.trim()
       options.push({
-        value: `${def.key}:${id}`,
-        label: `${def.label} / ${name.length > 0 ? `${name} (${id})` : id}`,
-        provider: def.key,
+        value: `${providerKey}:${id}`,
+        label: `${label} / ${name.length > 0 ? `${name} (${id})` : id}`,
+        provider: providerKey,
         model: id,
       })
+    }
+  }
+  for (const def of PROVIDERS) {
+    const provider = providers[def.key]
+    if (provider === undefined) continue
+    pushOption(def.key, def.label, provider.models)
+    for (const endpoint of provider.endpoints) {
+      const endpointName = endpoint.name.trim() || String(provider.endpoints.indexOf(endpoint) + 2)
+      pushOption(`${def.key}#${endpointName}`, `${def.label} · ${endpointName}`, endpoint.models)
     }
   }
   return options
@@ -404,6 +444,15 @@ export function Sub2ApiSettings() {
             key: '',
             keyConfigured: provider?.keyConfigured ?? false,
             models: (provider?.models ?? []).map(modelRow),
+            endpoints: (provider?.endpoints ?? []).map((endpoint) => ({
+              rowId: nextRowId++,
+              name: endpoint.name,
+              baseURL: endpoint.baseURL ?? '',
+              api: endpoint.api ?? '',
+              key: '',
+              keyConfigured: true,
+              models: (endpoint.models ?? []).map(modelRow),
+            })),
           }
         }
         setProviders(map)
@@ -432,8 +481,24 @@ export function Sub2ApiSettings() {
     setProviders((previous) => ({ ...previous, [key]: { ...(previous[key] ?? emptyProvider()), ...patch } }))
   }, [])
 
-  const updateModel = (providerKey: string, rowId: number, patch: Partial<ModelRow>) => {
+  const updateEndpoint = useCallback((providerKey: string, rowId: number, patch: Partial<EndpointState>) => {
+    setProviders((previous) => {
+      const provider = previous[providerKey] ?? emptyProvider()
+      return {
+        ...previous,
+        [providerKey]: { ...provider, endpoints: provider.endpoints.map((row) => row.rowId === rowId ? { ...row, ...patch } : row) },
+      }
+    })
+  }, [])
+
+  const updateModel = (providerKey: string, rowId: number, patch: Partial<ModelRow>, endpointRowId?: number) => {
     const provider = providers[providerKey] ?? emptyProvider()
+    if (endpointRowId !== undefined) {
+      updateEndpoint(providerKey, endpointRowId, {
+        models: provider.endpoints.find((row) => row.rowId === endpointRowId)?.models.map((row) => row.rowId === rowId ? { ...row, ...patch } : row) ?? [],
+      })
+      return
+    }
     updateProvider(providerKey, { models: provider.models.map((row) => row.rowId === rowId ? { ...row, ...patch } : row) })
   }
 
@@ -446,14 +511,21 @@ export function Sub2ApiSettings() {
     })
   }
 
-  const fillModel = async (def: ProviderDefinition, rowId: number) => {
+  const fillModel = async (def: ProviderDefinition, rowId: number, endpointRowId?: number) => {
     try {
       const catalog = await loadModelsDev()
       setProviders((previous) => {
         const provider = previous[def.key]
         if (provider === undefined) return previous
-        const models = provider.models.map((row) => row.rowId === rowId ? applyOfficialDefaults([row], def, catalog).rows[0] ?? row : row)
-        return { ...previous, [def.key]: { ...provider, models } }
+        if (endpointRowId === undefined) {
+          const models = provider.models.map((row) => row.rowId === rowId ? applyOfficialDefaults([row], def, catalog).rows[0] ?? row : row)
+          return { ...previous, [def.key]: { ...provider, models } }
+        }
+        const endpoints = provider.endpoints.map((endpoint) => endpoint.rowId !== endpointRowId ? endpoint : {
+          ...endpoint,
+          models: endpoint.models.map((row) => row.rowId === rowId ? applyOfficialDefaults([row], def, catalog).rows[0] ?? row : row),
+        })
+        return { ...previous, [def.key]: { ...provider, endpoints } }
       })
     } catch {
       // Manual values remain available if models.dev cannot be reached.
@@ -464,10 +536,19 @@ export function Sub2ApiSettings() {
     setBusy(`metadata-${def.key}`); setError(''); setMessage('')
     try {
       const catalog = await loadModelsDev()
-      const provider = providers[def.key] ?? emptyProvider()
-      const result = applyOfficialDefaults(provider.models, def, catalog)
-      updateProvider(def.key, { models: result.rows })
-      setMessage(result.filled > 0 ? `${def.label} 已从 models.dev 补全 ${result.filled} 个模型` : `${def.label} 没有需要补全的模型`)
+      setProviders((previous) => {
+        const provider = previous[def.key]
+        if (provider === undefined) return previous
+        let filled = applyOfficialDefaults(provider.models, def, catalog).filled
+        const models = applyOfficialDefaults(provider.models, def, catalog).rows
+        const endpoints = provider.endpoints.map((endpoint) => {
+          const result = applyOfficialDefaults(endpoint.models, def, catalog)
+          filled += result.filled
+          return { ...endpoint, models: result.rows }
+        })
+        setMessage(filled > 0 ? `${def.label} 已从 models.dev 补全 ${filled} 个模型` : `${def.label} 没有需要补全的模型`)
+        return { ...previous, [def.key]: { ...provider, models, endpoints } }
+      })
     } catch (e) {
       setError(`无法读取 models.dev：${String(e instanceof Error ? e.message : e)}`)
     } finally {
@@ -481,46 +562,69 @@ export function Sub2ApiSettings() {
       if (!structuredConfig) throw new Error('服务端仍在运行旧版插件，请重启 DSH Web 后再保存结构化模型配置')
       const payload = {
         baseURL,
-        providers: {} as Record<string, { apiKey: string; models: CatalogModel[] }>,
+        providers: {} as Record<string, { apiKey: string; models: CatalogModel[]; endpoints?: Array<Record<string, unknown>> }>,
         tools: {} as { analyze?: ImageToolModelRef; generate?: ImageToolModelRef },
       }
       for (const def of PROVIDERS) {
         const provider = providers[def.key] ?? emptyProvider()
-        const nonEmptyRows = provider.models.filter((row) =>
-          row.id.trim().length > 0 || row.name.trim().length > 0 || row.contextWindow.length > 0 || row.maxTokens.length > 0 || row.reasoning.length > 0)
-        const seen = new Set<string>()
-        const models = nonEmptyRows.map((row) => {
-          const id = row.id.trim()
-          if (id.length === 0) throw new Error(`${def.label} 存在未填写 ID 的模型`)
-          if (seen.has(id)) throw new Error(`${def.label} 模型 ID 重复：${id}`)
-          seen.add(id)
-          const name = row.name.trim()
-          const contextWindow = row.contextWindow.length > 0 ? Number(row.contextWindow) : undefined
-          if (contextWindow !== undefined && (!Number.isSafeInteger(contextWindow) || contextWindow < 1)) {
-            throw new Error(`${def.label} ${id} 的 Context Window 必须是正整数`)
-          }
-          const maxTokens = row.maxTokens.trim().length > 0 ? Number(row.maxTokens) : undefined
-          if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens < 1)) {
-            throw new Error(`${def.label} ${id} 的 Max Tokens 必须是正整数`)
-          }
-          const reasoningEfforts = row.reasoning === 'off' ? [] : row.reasoning === 'on'
-            ? (row.effortLevels.length > 0 ? row.effortLevels : [...DEFAULT_REASONING_LEVELS])
-            : undefined
-          const input: Array<'text' | 'image'> | undefined = row.input === 'text-image'
-            ? ['text', 'image']
-            : row.input === 'text'
-              ? ['text']
+        const serializeModels = (rows: ModelRow[], scopeLabel: string): CatalogModel[] => {
+          const nonEmptyRows = rows.filter((row) =>
+            row.id.trim().length > 0 || row.name.trim().length > 0 || row.contextWindow.length > 0 || row.maxTokens.length > 0 || row.reasoning.length > 0)
+          const seen = new Set<string>()
+          return nonEmptyRows.map((row) => {
+            const id = row.id.trim()
+            if (id.length === 0) throw new Error(`${scopeLabel} 存在未填写 ID 的模型`)
+            if (seen.has(id)) throw new Error(`${scopeLabel} 模型 ID 重复：${id}`)
+            seen.add(id)
+            const name = row.name.trim()
+            const contextWindow = row.contextWindow.length > 0 ? Number(row.contextWindow) : undefined
+            if (contextWindow !== undefined && (!Number.isSafeInteger(contextWindow) || contextWindow < 1)) {
+              throw new Error(`${scopeLabel} ${id} 的 Context Window 必须是正整数`)
+            }
+            const maxTokens = row.maxTokens.trim().length > 0 ? Number(row.maxTokens) : undefined
+            if (maxTokens !== undefined && (!Number.isSafeInteger(maxTokens) || maxTokens < 1)) {
+              throw new Error(`${scopeLabel} ${id} 的 Max Tokens 必须是正整数`)
+            }
+            const reasoningEfforts = row.reasoning === 'off' ? [] : row.reasoning === 'on'
+              ? (row.effortLevels.length > 0 ? row.effortLevels : [...DEFAULT_REASONING_LEVELS])
               : undefined
-          return {
-            id,
-            ...(name.length > 0 ? { name } : {}),
-            ...(contextWindow !== undefined ? { contextWindow } : {}),
-            ...(maxTokens !== undefined ? { maxTokens } : {}),
-            ...(input !== undefined ? { input } : {}),
-            ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+            const input: Array<'text' | 'image'> | undefined = row.input === 'text-image'
+              ? ['text', 'image']
+              : row.input === 'text'
+                ? ['text']
+                : undefined
+            return {
+              id,
+              ...(name.length > 0 ? { name } : {}),
+              ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(maxTokens !== undefined ? { maxTokens } : {}),
+              ...(input !== undefined ? { input } : {}),
+              ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+            }
+          })
+        }
+        const models = serializeModels(provider.models, def.label)
+        const endpointsPayload: Array<Record<string, unknown>> = []
+        for (const endpoint of provider.endpoints) {
+          const endpointName = endpoint.name.trim()
+          if (endpointName.length === 0 && endpoint.key.trim().length === 0 && endpoint.models.every((row) => row.id.trim().length === 0)) continue
+          if (!/^[A-Za-z0-9_-]+$/.test(endpointName)) {
+            throw new Error(`${def.label} 端点名称 "${endpointName}" 无效，仅允许字母、数字、- 和 _`)
           }
-        })
-        payload.providers[def.key] = { apiKey: provider.key, models }
+          const endpointModels = serializeModels(endpoint.models, `${def.label} 端点 ${endpointName}`)
+          endpointsPayload.push({
+            name: endpointName,
+            apiKey: endpoint.key,
+            ...(endpoint.baseURL.trim().length > 0 ? { baseURL: endpoint.baseURL.trim() } : {}),
+            ...(endpoint.api.length > 0 ? { api: endpoint.api } : {}),
+            models: endpointModels,
+          })
+        }
+        payload.providers[def.key] = {
+          apiKey: provider.key,
+          models,
+          ...(endpointsPayload.length > 0 ? { endpoints: endpointsPayload } : {}),
+        }
       }
       const analyze = serializeToolRef(tools.analyze)
       const generate = serializeToolRef(tools.generate)
@@ -536,15 +640,20 @@ export function Sub2ApiSettings() {
     }
   }
 
-  const discover = async (def: ProviderDefinition) => {
-    const key = providers[def.key]?.key ?? ''
-    setBusy(`discover-${def.key}`); setError(''); setMessage('')
+  const discover = async (def: ProviderDefinition, endpointRowId?: number) => {
+    const provider = providers[def.key] ?? emptyProvider()
+    const endpointState = endpointRowId !== undefined ? provider.endpoints.find((row) => row.rowId === endpointRowId) : undefined
+    const key = (endpointState ?? provider).key
+    const endpointName = endpointState?.name.trim() ?? ''
+    const busyId = `discover-${def.key}${endpointRowId !== undefined ? `-${endpointRowId}` : ''}`
+    setBusy(busyId); setError(''); setMessage('')
     // 先清空现有模型列表，再重新拉取：失败的拉取不会残留旧列表。
-    updateProvider(def.key, { models: [] })
+    if (endpointState === undefined || endpointRowId === undefined) updateProvider(def.key, { models: [] })
+    else updateEndpoint(def.key, endpointRowId, { models: [] })
     try {
       const res = await api<{ ok: boolean; models: CatalogModel[] }>(`${BASE}/discover`, {
         method: 'POST',
-        body: JSON.stringify({ baseURL, apiKey: key, provider: def.key }),
+        body: JSON.stringify({ baseURL, apiKey: key, provider: def.key, endpoint: endpointName }),
       })
       let rows = (res.models ?? []).map(modelRow)
       try {
@@ -552,8 +661,9 @@ export function Sub2ApiSettings() {
       } catch {
         // Discovery results are still useful without public metadata.
       }
-      updateProvider(def.key, { models: rows })
-      setMessage(`${def.label} 发现 ${rows.length} 个模型`)
+      if (endpointState === undefined || endpointRowId === undefined) updateProvider(def.key, { models: rows })
+      else updateEndpoint(def.key, endpointRowId, { models: rows })
+      setMessage(`${def.label}${endpointName.length > 0 ? ` · ${endpointName}` : ''} 发现 ${rows.length} 个模型`)
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e))
     } finally {
@@ -561,15 +671,19 @@ export function Sub2ApiSettings() {
     }
   }
 
-  const checkUsage = async (def: ProviderDefinition) => {
-    const key = providers[def.key]?.key ?? ''
-    setBusy(`usage-${def.key}`); setError(''); setMessage('')
+  const checkUsage = async (def: ProviderDefinition, endpointRowId?: number) => {
+    const provider = providers[def.key] ?? emptyProvider()
+    const endpointState = endpointRowId !== undefined ? provider.endpoints.find((row) => row.rowId === endpointRowId) : undefined
+    const key = (endpointState ?? provider).key
+    const endpointName = endpointState?.name.trim() ?? ''
+    const busyId = `usage-${def.key}${endpointRowId !== undefined ? `-${endpointRowId}` : ''}`
+    setBusy(busyId); setError(''); setMessage('')
     try {
       const res = await api<{ ok: boolean; summary?: string }>(`${BASE}/usage`, {
         method: 'POST',
-        body: JSON.stringify({ baseURL, apiKey: key, provider: def.key }),
+        body: JSON.stringify({ baseURL, apiKey: key, provider: def.key, endpoint: endpointName }),
       })
-      setMessage(`${def.label} 用量: ${res.summary ?? ''}`)
+      setMessage(`${def.label}${endpointName.length > 0 ? ` · ${endpointName}` : ''} 用量: ${res.summary ?? ''}`)
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e))
     } finally {
@@ -787,13 +901,171 @@ export function Sub2ApiSettings() {
                       默认值来自 <a href="https://models.dev/" target="_blank" rel="noreferrer">models.dev</a>，未匹配时可手动填写
                     </span>
                     <div className="s2a_modelActions">
-                      <button className="s2a_btn" disabled={busy.length > 0 || provider.models.length === 0} onClick={() => fillProvider(def)}>
+                      <button className="s2a_btn" disabled={busy.length > 0} onClick={() => fillProvider(def)}>
                         {busy === `metadata-${def.key}` ? '…' : '补全数据'}
                       </button>
                       <button className="s2a_btn" disabled={busy.length > 0} onClick={() => updateProvider(def.key, { models: [...provider.models, modelRow()] })}>
                         添加模型
                       </button>
                     </div>
+                  </div>
+                  <div className="s2a_endpoints">
+                    <label className="s2a_fieldLabel">附加端点（独立 key / 独立地址，路由名 sub2api-{def.key}-&lt;名称&gt;）</label>
+                    {provider.endpoints.map((endpoint) => {
+                      const endpointName = endpoint.name.trim() || `endpoint-${provider.endpoints.indexOf(endpoint) + 2}`
+                      const busyDiscover = busy === `discover-${def.key}-${endpoint.rowId}`
+                      const busyUsage = busy === `usage-${def.key}-${endpoint.rowId}`
+                      return (
+                        <div key={endpoint.rowId} className="s2a_endpointCard">
+                          <div className="s2a_endpointHead">
+                            <span className="s2a_endpointName">端点 {endpointName}</span>
+                            <div className="s2a_endpointActions">
+                              <button type="button" className="s2a_btn" disabled={busy.length > 0 || endpoint.name.trim().length === 0} onClick={() => discover(def, endpoint.rowId)}>
+                                {busyDiscover ? '…' : '获取模型'}
+                              </button>
+                              <button type="button" className="s2a_btn" disabled={busy.length > 0 || endpoint.name.trim().length === 0} onClick={() => checkUsage(def, endpoint.rowId)}>
+                                {busyUsage ? '…' : '查看用量'}
+                              </button>
+                              <button
+                                type="button"
+                                className="s2a_iconBtn s2a_trash"
+                                title="删除端点"
+                                aria-label={`删除 ${def.label} 端点 ${endpointName}`}
+                                onClick={() => updateProvider(def.key, { endpoints: provider.endpoints.filter((item) => item.rowId !== endpoint.rowId) })}
+                              >
+                                <IconTrash />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="s2a_endpointGrid">
+                            <div className="s2a_field">
+                              <label className="s2a_fieldLabel">端点名称</label>
+                              <input
+                                className="s2a_input"
+                                value={endpoint.name}
+                                placeholder="如 backup（字母数字-_）"
+                                aria-label={`${def.label} 端点名称`}
+                                onChange={(event) => updateEndpoint(def.key, endpoint.rowId, { name: event.target.value })}
+                              />
+                            </div>
+                            <div className="s2a_field">
+                              <label className="s2a_fieldLabel">
+                                API Key{endpoint.keyConfigured || endpoint.key.length > 0 ? ' ✓' : ''}
+                              </label>
+                              <input
+                                className="s2a_input"
+                                type="password"
+                                value={endpoint.key}
+                                placeholder={endpoint.keyConfigured ? def.placeholder + '（已配置，留空保持不变）' : def.placeholder}
+                                aria-label={`${def.label} 端点 ${endpointName} API Key`}
+                                onChange={(event) => updateEndpoint(def.key, endpoint.rowId, { key: event.target.value })}
+                              />
+                            </div>
+                          </div>
+                          <div className="s2a_field">
+                            <label className="s2a_fieldLabel">Base URL（留空使用全局）</label>
+                            <input
+                              className="s2a_input"
+                              value={endpoint.baseURL}
+                              placeholder="https://other-gateway.example.com"
+                              aria-label={`${def.label} 端点 ${endpointName} Base URL`}
+                              onChange={(event) => updateEndpoint(def.key, endpoint.rowId, { baseURL: event.target.value })}
+                            />
+                          </div>
+                          <div className="s2a_models">
+                            {endpoint.models.length === 0
+                              ? <p className="s2a_modelEmpty">暂无模型</p>
+                              : endpoint.models.map((row) => {
+                                const expanded = expandedModels.has(row.rowId)
+                                const detailsId = `s2a-model-${row.rowId}-details`
+                                return (
+                                  <div key={row.rowId} className="s2a_modelItem">
+                                    <div className="s2a_modelSummary">
+                                      <div>
+                                        <input
+                                          className="s2a_input"
+                                          value={row.id}
+                                          placeholder="模型 ID"
+                                          aria-label={`${def.label} 端点 ${endpointName} 模型 ID`}
+                                          onChange={(event) => updateModel(def.key, row.rowId, { id: event.target.value }, endpoint.rowId)}
+                                          onBlur={() => fillModel(def, row.rowId, endpoint.rowId)}
+                                        />
+                                      </div>
+                                      <div>
+                                        <input
+                                          className="s2a_input"
+                                          value={row.name}
+                                          placeholder="名称"
+                                          aria-label={`${def.label} 端点 ${endpointName} 模型名称`}
+                                          onChange={(event) => updateModel(def.key, row.rowId, { name: event.target.value }, endpoint.rowId)}
+                                        />
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className="s2a_iconBtn s2a_expandBtn"
+                                        title={expanded ? '收起模型详情' : '展开模型详情'}
+                                        aria-label={expanded ? `收起 ${row.id || '模型'} 详情` : `展开 ${row.id || '模型'} 详情`}
+                                        aria-expanded={expanded}
+                                        aria-controls={detailsId}
+                                        onClick={() => toggleModel(row.rowId)}
+                                      >
+                                        <IconChevron expanded={expanded} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="s2a_iconBtn s2a_trash"
+                                        title="删除模型"
+                                        aria-label={`删除 ${row.id || '模型'}`}
+                                        onClick={() => updateEndpoint(def.key, endpoint.rowId, { models: endpoint.models.filter((item) => item.rowId !== row.rowId) })}
+                                      >
+                                        <IconTrash />
+                                      </button>
+                                    </div>
+                                    {expanded && (
+                                      <div id={detailsId} className="s2a_modelDetails">
+                                        <div className="s2a_field">
+                                          <label className="s2a_fieldLabel">上下文窗口</label>
+                                          <input
+                                            className="s2a_input"
+                                            type="number"
+                                            min="1"
+                                            step="1"
+                                            value={row.contextWindow}
+                                            placeholder="自动填充"
+                                            aria-label={`${def.label} 上下文窗口`}
+                                            onChange={(event) => updateModel(def.key, row.rowId, { contextWindow: event.target.value }, endpoint.rowId)}
+                                          />
+                                        </div>
+                                        <div className="s2a_field">
+                                          <label className="s2a_fieldLabel">最大输出 token</label>
+                                          <input
+                                            className="s2a_input"
+                                            type="number"
+                                            min="1"
+                                            step="1"
+                                            value={row.maxTokens}
+                                            placeholder="自动填充"
+                                            aria-label={`${def.label} 最大输出 token`}
+                                            onChange={(event) => updateModel(def.key, row.rowId, { maxTokens: event.target.value }, endpoint.rowId)}
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                          </div>
+                          <div className="s2a_modelActions">
+                            <button className="s2a_btn" disabled={busy.length > 0} onClick={() => updateEndpoint(def.key, endpoint.rowId, { models: [...endpoint.models, modelRow()] })}>
+                              添加模型
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <button className="s2a_btn" disabled={busy.length > 0} onClick={() => updateProvider(def.key, { endpoints: [...provider.endpoints, emptyEndpoint()] })} style={{ alignSelf: 'flex-start' }}>
+                      添加端点
+                    </button>
                   </div>
                 </div>
               </div>
