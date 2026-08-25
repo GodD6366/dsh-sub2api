@@ -9,6 +9,7 @@ Sub2API is an AI API gateway that turns subscription quota into OpenAI-compatibl
 ## Features
 
 - **One base URL, four provider routes**: `sub2api-openai`, `sub2api-claude`, `sub2api-grok`, `sub2api-gemini` — each configured with its own key, registered as a live LLM provider the moment the key is set.
+- **Multiple endpoints per platform**: each platform may declare several keyed endpoints (`endpoints[]`) with their own base URL override, registered as separate `<route>-<name>` routes; the settings page ships a per-endpoint editor with model discovery and usage lookup.
 - **Streaming chat (backed by pi-ai)**: SSE streaming, tool calls, reasoning deltas, and token usage are mapped to the harness protocol by `dsh-llm-pi-ai`, which natively handles wire-format details like top-level `function_call` items in the Responses API.
 - **Model discovery**: one-click "fetch models" calls `GET {baseURL}/models` with the key, so each route's catalog matches exactly what the sub2api group serves.
 - **Reasoning effort (thinking mode)**: `reasoning_effort` is passed straight through to the gateway and adjustable right in the chat model selector; the settings page's per-model "reasoning strength" column fills each model's real levels from [models.dev](https://models.dev/) `reasoning_options` (e.g. `gpt-5.6-sol` → none/low/medium/high/xhigh/max, `deepseek-v4-flash` → low/high/max), with editable levels and an explicit opt-out.
@@ -83,6 +84,33 @@ llm-sub2api:
 ```
 
 `api` accepts `openai-completions` (`/v1/chat/completions`), `openai-responses` (`/v1/responses`), or `anthropic-messages` (`/v1/messages`); omitted means the automatic group default above.
+
+### Multiple endpoints per platform
+
+A platform can register several keyed routes — for example a second sub2api server, a spare group, or a dedicated image key. Declare them under `endpoints[]` in `$DSH_HOME/settings.yaml`:
+
+```yaml
+llm-sub2api:
+  baseURL: http://localhost:8080
+  providers:
+    openai:
+      apiKeyEnv: SUB2API_OPENAI_API_KEY        # route: sub2api-openai
+      models:
+        - id: gpt-4o
+      endpoints:
+        - name: backup                          # route: sub2api-openai-backup
+          apiKeyEnv: SUB2API_OPENAI_BACKUP_API_KEY
+          models:
+            - id: gpt-5.6-sol
+        - name: other-host                      # may point at a different gateway
+          apiKeyEnv: SUB2API_OPENAI_OTHER_API_KEY
+          baseURL: http://10.0.0.5:8080
+          api: openai-completions               # optional protocol override
+          models:
+            - id: gpt-4o-mini
+```
+
+Rules: each endpoint needs its own credential reference and at least one model; `name` must match `[A-Za-z0-9_-]+` and becomes the route suffix (`sub2api-openai-<name>`); an endpoint `baseURL` overrides the global one entirely; the first (legacy) key keeps the bare platform route. The settings page renders an editor per endpoint under each provider card, with per-endpoint key fields, base URL override, model catalog, discovery, and usage lookup.
 
 ### Relationship to dsh-llm-pi-ai
 

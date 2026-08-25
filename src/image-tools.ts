@@ -22,6 +22,7 @@ import {
   apiProtocolForKey,
   gatewayAnthropicRoot,
   gatewayApiRoot,
+  resolveProviderEndpoints,
   type ApiProtocol,
   type Config,
   type ProviderKey,
@@ -157,30 +158,49 @@ function resolveToolModel(config: Config, kind: 'analyze' | 'generate'): Resolve
   if (provider.length === 0 || model.length === 0) {
     throw new Error(`sub2api: 未配置${label}模型。打开设置 → Sub2API 模型，为「全局图像工具」指定一个模型后再试`)
   }
-  if (!isProviderKey(provider)) {
+  // The stored ref is `<provider>[#<endpoint>]`; the endpoint segment only
+  // appears when a platform has several keyed endpoints (`#` never occurs in
+  // platform ids).
+  const [rawProvider, rawEndpoint = ''] = provider.split('#')
+  if (!isProviderKey(rawProvider)) {
     throw new Error(`sub2api: ${label}模型的平台 "${provider}" 无效，应为 openai / claude / grok / gemini`)
   }
   const baseURL = config.baseURL.trim().replace(/\/+$/, '')
   if (baseURL.length === 0) throw new Error('sub2api: baseURL is not configured')
-  const profile = config.providers[provider]
-  if (profile.apiKeyEnv === undefined) {
-    throw new Error(`sub2api: ${PROVIDER_LABELS[provider]} 未配置 API key，无法调用${label}模型`)
+  const profile = config.providers[rawProvider]
+  const endpoints = resolveProviderEndpoints(rawProvider, profile)
+  const endpoint = endpoints.find((entry) => entry.name === (rawEndpoint.length > 0 ? rawEndpoint : endpoints[0]?.name))
+    ?? endpoints.find((entry) => entry.profile.models?.some((candidate) => candidate.id === model))
+    ?? endpoints[0]
+  if (endpoint === undefined || endpoint.profile.apiKeyEnv === undefined) {
+    throw new Error(`sub2api: ${PROVIDER_LABELS[rawProvider]} 未配置 API key，无法调用${label}模型`)
   }
-  const catalogModel = profile.models?.find((entry) => entry.id === model)
+  const catalogModel = endpoint.profile.models?.find((entry) => entry.id === model)
   // The settings store the bare gateway host; the wire endpoints live under the
   // `/v1` root for OpenAI-style protocols, while the Anthropic SDK appends
-  // `/v1/messages` itself and needs the bare host.
-  const api = apiProtocolForKey(provider, profile)
-  const endpointRoot = api === 'anthropic-messages' ? gatewayAnthropicRoot(baseURL) : gatewayApiRoot(baseURL)
+  // `/v1/messages` itself and needs the bare host. An endpoint may override
+  // the global base URL entirely.
+  const api = apiProtocolForKey(rawProvider, endpoint.profile)
+  const endpointBase = endpoint.profile.baseURL?.trim() || baseURL
+  const endpointRoot = api === 'anthropic-messages' ? gatewayAnthropicRoot(endpointBase) : gatewayApiRoot(endpointBase)
   return {
-    route: `sub2api-${provider}`,
-    label: PROVIDER_LABELS[provider],
-    profile,
+    route: endpoint.route,
+    label: PROVIDER_LABELS[rawProvider],
+    profile: endpoint.profile,
     model,
     baseURL: endpointRoot,
     api,
     maxTokens: catalogModel?.maxTokens ?? DEFAULT_MAX_TOKENS,
   }
+}
+
+/**
+ * Resolve the concrete endpoint (route + profile) behind a global image tool
+ * model reference. Exported for tests and external consumers.
+ */
+export function resolveToolEndpoint(config: Config, kind: 'analyze' | 'generate'): { route: string; profile: ProviderProfile; model: string } {
+  const resolved = resolveToolModel(config, kind)
+  return { route: resolved.route, profile: resolved.profile, model: resolved.model }
 }
 
 async function readErrorDetail(response: Response): Promise<string> {

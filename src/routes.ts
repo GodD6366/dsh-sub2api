@@ -17,7 +17,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import { API_PROTOCOLS, PROVIDERS, gatewayApiRoot, type ApiProtocol, type CatalogModel, type Config, type ImageToolModelRef, type ImageToolsConfig, type ProviderKey, type ProviderProfile } from './index.ts'
+import { API_PROTOCOLS, PROVIDERS, gatewayApiRoot, resolveProviderEndpoints, type ApiProtocol, type CatalogModel, type Config, type ImageToolModelRef, type ImageToolsConfig, type ProviderKey, type ProviderProfile, type ProviderEndpoint, type ResolvedEndpoint } from './index.ts'
 
 export const ROUTES = {
   get: '/plugins/dsh-sub2api/config',
@@ -28,10 +28,23 @@ export const ROUTES = {
   attachment: '/plugins/dsh-sub2api/attachment',
 } as const
 
+/** Redacted view of one named extra endpoint (keys stay in the credential store). */
+export interface EndpointPayload {
+  name: string
+  baseURL?: string
+  api?: ApiProtocol
+  models: CatalogModel[]
+}
+
 export interface ConfigPayload {
   baseURL: string
   catalogFormat: 'structured-v1'
-  providers: Record<string, { keyConfigured: boolean; models: CatalogModel[] }>
+  providers: Record<string, {
+    keyConfigured: boolean
+    models: CatalogModel[]
+    /** Named extra endpoints beyond the legacy top-level key. */
+    endpoints?: EndpointPayload[]
+  }>
   tools: ImageToolsConfig
 }
 
@@ -84,9 +97,23 @@ function readProviderConfig(config: Config): ConfigPayload {
   const providers: ConfigPayload['providers'] = {}
   for (const def of PROVIDERS) {
     const profile = config.providers[def.key]
+    const endpoints = resolveProviderEndpoints(def.key, profile)
+    // The legacy top-level key renders as endpoint "1"; every named extra
+    // entry follows. Only entries beyond the first are echoed back.
+    const extras: EndpointPayload[] = []
+    for (let index = 1; index < endpoints.length; index++) {
+      const endpoint = endpoints[index]!
+      extras.push({
+        name: endpoint.name,
+        ...(endpoint.profile.baseURL !== undefined ? { baseURL: endpoint.profile.baseURL } : {}),
+        ...(endpoint.profile.api !== undefined ? { api: endpoint.profile.api } : {}),
+        models: (endpoint.profile.models ?? []).map((model) => ({ ...model })),
+      })
+    }
     providers[def.key] = {
-      keyConfigured: profile.apiKeyEnv !== undefined,
+      keyConfigured: profile.apiKeyEnv !== undefined || (profile.endpoints?.length ?? 0) > 0,
       models: profile.models?.map((model) => ({ ...model })) ?? [],
+      ...(extras.length > 0 ? { endpoints: extras } : {}),
     }
   }
   return {
@@ -157,6 +184,12 @@ function providerCredentialRef(platform: string): CredentialRef {
   return credentialRef(`SUB2API_${platform.toUpperCase()}_API_KEY`)
 }
 
+/** Credential ref for one named extra endpoint: SUB2API_<PLATFORM>_<NAME>_API_KEY. */
+function endpointCredentialRef(platform: string, name: string): CredentialRef {
+  const safeName = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_')
+  return credentialRef(`SUB2API_${platform.toUpperCase()}_${safeName}_API_KEY`)
+}
+
 function isProviderKey(value: string): value is ProviderKey {
   return PROVIDERS.some((def) => def.key === value)
 }
@@ -194,29 +227,40 @@ interface RouteContext {
   resolveApiKey: (route: string, profile: ProviderProfile) => Promise<string>
 }
 
+/** Whether a named endpoint of one platform already has its key stored. */
+function endpointsHaveCredential(config: Config, platform: ProviderKey, name: string): boolean {
+  const endpoints = resolveProviderEndpoints(platform, config.providers[platform])
+  return endpoints.some((entry) => entry.name === name && entry.profile.apiKeyEnv !== undefined)
+}
+
 /**
  * One-shot probe key for discovery/usage: a freshly typed key wins (it is the
  * one under test); otherwise fall back to the credential already stored for
- * that provider, so the settings page does not force the user to re-type the
- * key every time.
+ * that endpoint, so the settings page does not force the user to re-type the
+ * key every time. `endpointName` selects among multiple keyed endpoints of
+ * one platform ("" = the legacy top-level key).
  */
 async function resolveProbeKey(
   ctx: Context,
   routes: RouteContext,
   provider: string,
+  endpointName: string,
   typedKey: string,
 ): Promise<string> {
   if (typedKey.length > 0) return typedKey
   if (!isProviderKey(provider)) throw new Error('provider 无效，应为 openai / claude / grok / gemini')
   const def = PROVIDERS.find((entry) => entry.key === provider)
   const profile = routes.config().providers[provider]
-  if (profile?.apiKeyEnv === undefined) {
+  const endpoints = resolveProviderEndpoints(provider, profile)
+  const endpoint = endpoints.find((entry) => entry.name === (endpointName.length > 0 ? endpointName : endpoints[0]?.name))
+    ?? endpoints[0]
+  if (endpoint === undefined || endpoint.profile.apiKeyEnv === undefined) {
     throw new Error(`${def?.label ?? provider} 未配置 API key：请先填写 key 并保存配置，再获取模型/查看用量`)
   }
   try {
-    return await routes.resolveApiKey(`sub2api-${provider}`, profile)
+    return await routes.resolveApiKey(endpoint.route, endpoint.profile)
   } catch (error) {
-    throw new Error(`无法使用已保存的 ${def?.label ?? provider} key：${safeMessage(error)}`)
+    throw new Error(`无法使用已保存的 ${def?.label ?? provider}（端点 ${endpoint.name}）key：${safeMessage(error)}`)
   }
 }
 
@@ -287,6 +331,48 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
             }
           }
           profile.models = readCatalogModels(raw?.models, profile.models ?? [])
+
+          // Named extra endpoints: each entry carries its own key (written to
+          // the credential store), optional base URL, protocol override, and
+          // model catalog. An empty models list drops the endpoint again.
+          const rawEndpoints = Array.isArray(raw?.endpoints) ? (raw!.endpoints as unknown[]) : []
+          const parsedEndpoints: ProviderEndpoint[] = []
+          for (const item of rawEndpoints) {
+            if (typeof item !== 'object' || item === null) continue
+            const entry = item as Record<string, unknown>
+            const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+            const endpointKey = typeof entry.apiKey === 'string' ? entry.apiKey.trim() : ''
+            const models = readCatalogModels(entry.models, [])
+            if (name.length === 0 && endpointKey.length === 0 && models.length === 0) continue
+            const resolvedName = name.length > 0 ? name : `endpoint-${parsedEndpoints.length + 2}`
+            if (!/^[A-Za-z0-9_-]+$/.test(resolvedName)) {
+              return json(res, 400, { error: `${def.label} 端点名称 "${resolvedName}" 无效，仅允许字母、数字、- 和 _` })
+            }
+            const endpointBaseURL = typeof entry.baseURL === 'string' ? entry.baseURL.trim().replace(/\/+$/, '') : ''
+            if (endpointBaseURL.length > 0 && !/^https?:\/\//.test(endpointBaseURL)) {
+              return json(res, 400, { error: `${def.label} 端点 ${resolvedName} 的 baseURL 必须以 http(s):// 开头` })
+            }
+            const endpointApi = typeof entry.api === 'string' ? entry.api.trim() : ''
+            if (endpointApi.length > 0 && !(API_PROTOCOLS as readonly string[]).includes(endpointApi)) {
+              return json(res, 400, { error: `${def.label} 端点 ${resolvedName} 的网关协议 "${endpointApi}" 无效，应为 ${API_PROTOCOLS.join(' / ')}` })
+            }
+            const ref = endpointCredentialRef(def.key, resolvedName)
+            if (endpointKey.length > 0 && credentials !== undefined) {
+              await credentials.set(ref, endpointKey)
+            }
+            // An endpoint whose key was never stored stays in the payload so a
+            // half-filled form survives save; the translator skips it until it
+            // has both a key and models.
+            const hasStoredCredential = endpointKey.length > 0 || endpointsHaveCredential(current, def.key, resolvedName)
+            parsedEndpoints.push({
+              name: resolvedName,
+              ...(endpointBaseURL.length > 0 ? { baseURL: endpointBaseURL } : {}),
+              ...(endpointApi.length > 0 ? { api: endpointApi as ApiProtocol } : {}),
+              ...(hasStoredCredential ? { apiKeyEnv: ref } : {}),
+              models,
+            })
+          }
+          profile.endpoints = parsedEndpoints.length > 0 ? parsedEndpoints : undefined
         }
 
         const tools = readImageTools(body.tools, current.tools)
@@ -309,14 +395,22 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
         const body = await readJson(req)
         const baseURL = typeof body.baseURL === 'string' ? body.baseURL.trim().replace(/\/+$/, '') : ''
         const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
+        const endpointName = typeof body.endpoint === 'string' ? body.endpoint.trim() : ''
         if (baseURL.length === 0) return json(res, 400, { error: 'baseURL is required' })
         let apiKey: string
         try {
-          apiKey = await resolveProbeKey(ctx, routes, provider, typeof body.apiKey === 'string' ? body.apiKey.trim() : '')
+          apiKey = await resolveProbeKey(ctx, routes, provider, endpointName, typeof body.apiKey === 'string' ? body.apiKey.trim() : '')
         } catch (error) {
           return json(res, 400, { error: safeMessage(error) })
         }
-        const response = await fetch(`${gatewayApiRoot(baseURL)}/models`, {
+        // An endpoint may point at a different gateway entirely.
+        let probeURL = baseURL
+        if (endpointName.length > 0 && isProviderKey(provider)) {
+          const endpoints = resolveProviderEndpoints(provider, routes.config().providers[provider])
+          const override = endpoints.find((entry) => entry.name === endpointName)?.profile.baseURL?.trim()
+          if (override !== undefined && override.length > 0) probeURL = override.replace(/\/+$/, '')
+        }
+        const response = await fetch(`${gatewayApiRoot(probeURL)}/models`, {
           method: 'GET',
           headers: { authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(30000),
@@ -348,14 +442,21 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
         const body = await readJson(req)
         const baseURL = typeof body.baseURL === 'string' ? body.baseURL.trim().replace(/\/+$/, '') : ''
         const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
+        const endpointName = typeof body.endpoint === 'string' ? body.endpoint.trim() : ''
         if (baseURL.length === 0) return json(res, 400, { error: 'baseURL is required' })
         let apiKey: string
         try {
-          apiKey = await resolveProbeKey(ctx, routes, provider, typeof body.apiKey === 'string' ? body.apiKey.trim() : '')
+          apiKey = await resolveProbeKey(ctx, routes, provider, endpointName, typeof body.apiKey === 'string' ? body.apiKey.trim() : '')
         } catch (error) {
           return json(res, 400, { error: safeMessage(error) })
         }
-        const response = await fetch(`${gatewayApiRoot(baseURL)}/usage`, {
+        let probeURL = baseURL
+        if (endpointName.length > 0 && isProviderKey(provider)) {
+          const endpoints = resolveProviderEndpoints(provider, routes.config().providers[provider])
+          const override = endpoints.find((entry) => entry.name === endpointName)?.profile.baseURL?.trim()
+          if (override !== undefined && override.length > 0) probeURL = override.replace(/\/+$/, '')
+        }
+        const response = await fetch(`${gatewayApiRoot(probeURL)}/usage`, {
           method: 'GET',
           headers: { authorization: `Bearer ${apiKey}` },
           signal: AbortSignal.timeout(30000),
@@ -399,8 +500,9 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
       const config = routes.config()
       const models: Record<string, string[]> = {}
       for (const def of PROVIDERS) {
-        if (config.providers[def.key].apiKeyEnv !== undefined) {
-          models[def.route] = config.providers[def.key].models?.map((m) => m.id) ?? []
+        for (const endpoint of resolveProviderEndpoints(def.key, config.providers[def.key])) {
+          const list = (endpoint.profile.models ?? []).map((m) => m.id)
+          if (list.length > 0) models[endpoint.route] = list
         }
       }
       json(res, 200, { routes: routes.listRegisteredRoutes(), models })

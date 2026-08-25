@@ -53,7 +53,10 @@ export {
   stripVisionModel,
   neutralizeReplayState,
 } from './vision-wrapper.ts'
-export { describeViaVisionModel } from './image-tools.ts'
+export {
+  describeViaVisionModel,
+  resolveToolEndpoint,
+} from './image-tools.ts'
 export {
   PI_AI_NS,
   ROUTE_PREFIX,
@@ -132,8 +135,28 @@ export interface CatalogModel {
   reasoningEfforts?: string[]
 }
 
+/**
+ * One independently keyed gateway endpoint inside a provider profile. The
+ * first endpoint is optional and may be left out: a profile with no `endpoints`
+ * keeps its legacy single-key shape (top-level `apiKeyEnv` + `models`). Each
+ * entry carries its own credential reference, optional base URL (absent = the
+ * global `baseURL`), optional wire-protocol override, and model catalog.
+ */
+export interface ProviderEndpoint {
+  /** Stable id for this endpoint; defaults to "1", "2", … when absent. */
+  name?: string
+  /** Credential reference (environment-variable name) resolved per request. */
+  apiKeyEnv?: string
+  /** Gateway base URL override for this endpoint; absent uses the global baseURL. */
+  baseURL?: string
+  /** Wire protocol override; absent selects the group's native protocol. */
+  api?: ApiProtocol
+  /** Advisory model catalog served by this endpoint. */
+  models?: CatalogModel[]
+}
+
 export interface ProviderProfile {
-  /** Credential reference (environment-variable name) resolved per request through `ctx.credentials`. */
+  /** Legacy single-endpoint credential reference (environment-variable name). */
   apiKeyEnv?: string
   /**
    * Wire protocol spoken to the gateway for this platform group. Absent
@@ -143,8 +166,16 @@ export interface ProviderProfile {
    * chat/completions after all.
    */
   api?: ApiProtocol
+  /** Gateway base URL override for this profile; absent uses the global baseURL. */
+  baseURL?: string
   /** Advisory model catalog for this route. */
   models?: CatalogModel[]
+  /**
+   * Additional keyed endpoints beyond the legacy top-level fields. Routes are
+   * emitted as `<route>` for the legacy/first key and `<route>-<name>` for
+   * each named endpoint.
+   */
+  endpoints?: ProviderEndpoint[]
 }
 
 /** One dedicated model used by a global image tool, independent of the chat route. */
@@ -203,10 +234,20 @@ const apiProtocol = z.union([
   z.const('anthropic-messages'),
 ])
 
+const providerEndpoint = z.object({
+  name: z.string(),
+  apiKeyEnv: z.string().role('credential-ref'),
+  baseURL: z.string(),
+  api: apiProtocol,
+  models: z.array(catalogModel),
+})
+
 const providerProfile = z.object({
   apiKeyEnv: z.string().role('credential-ref'),
   api: apiProtocol,
+  baseURL: z.string(),
   models: z.array(catalogModel),
+  endpoints: z.array(providerEndpoint),
 })
 
 // Keep these fields optional strings. The settings layer fills absent
@@ -254,6 +295,44 @@ const DEFAULT_PROTOCOL: Record<ProviderKey, ApiProtocol> = {
   claude: 'anthropic-messages',
   grok: 'openai-completions',
   gemini: 'openai-completions',
+}
+
+/**
+ * One registered route derived from a provider profile: either the legacy
+ * top-level key (route = `<platform route>`) or a named endpoint entry
+ * (route = `<platform route>-<name>`).
+ */
+export interface ResolvedEndpoint {
+  /** Route id this endpoint registers as (e.g. `sub2api-openai-2`). */
+  route: string
+  /** Platform key (`openai` / `claude` / `grok` / `gemini`). */
+  key: ProviderKey
+  /** Endpoint name as stored in config ("1", "2", … or user-provided). */
+  name: string
+  profile: ProviderProfile
+}
+
+/**
+ * Expand one provider profile into its registered endpoints, in order. The
+ * legacy top-level fields come first; named `endpoints[]` entries follow.
+ * Endpoints without a credential reference are skipped — a hand-declared
+ * pi-ai route needs a key to be usable.
+ */
+export function resolveProviderEndpoints(key: ProviderKey, profile: ProviderProfile): ResolvedEndpoint[] {
+  const def = PROVIDERS.find((entry) => entry.key === key)
+  const baseRoute = def?.route ?? `sub2api-${key}`
+  const resolved: ResolvedEndpoint[] = []
+  if (profile.apiKeyEnv !== undefined) {
+    resolved.push({ route: baseRoute, key, name: '1', profile })
+  }
+  let fallbackIndex = 2
+  for (const endpoint of profile.endpoints ?? []) {
+    if (endpoint.apiKeyEnv === undefined) continue
+    const name = endpoint.name?.trim() || String(fallbackIndex)
+    resolved.push({ route: `${baseRoute}-${name}`, key, name, profile: { ...profile, ...endpoint } })
+    fallbackIndex++
+  }
+  return resolved
 }
 
 /** Resolve the wire protocol for one provider key; shared by chat routes and the global image tools. */
