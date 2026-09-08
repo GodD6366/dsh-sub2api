@@ -9,7 +9,7 @@
  * @module dsh-sub2api/client/settings
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ProviderIcon } from './icons.tsx'
 import type { ProviderIconName } from './icons.tsx'
 
@@ -108,6 +108,7 @@ const css = `
 .s2a_modelSource{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .s2a_modelSource a{color:inherit;text-decoration:underline;text-underline-offset:2px}
 .s2a_actions{position:sticky;bottom:0;z-index:5;align-items:center;justify-content:flex-end;gap:8px;margin-top:4px;padding:12px 0;background:var(--dsw-alias-bg-layer-1,#fff);border-top:1px solid var(--dsw-alias-border-l2,#ddd);display:flex}
+.s2a_actions::after{content:"";position:absolute;top:100%;left:0;right:0;height:var(--s2a-footer-inset,24px);background:inherit}
 .s2a_toast{position:fixed;top:24px;right:24px;z-index:10000;display:flex;align-items:flex-start;gap:12px;box-sizing:border-box;max-width:min(480px,calc(100vw - 32px));max-height:40vh;overflow:auto;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 6px 24px #0002}.s2a_toast .s2a_status{overflow-wrap:anywhere;flex:1}.s2a_toast button{flex-shrink:0}
 .s2a_status{margin:0;font-size:12px;line-height:18px;white-space:pre-wrap;color:var(--dsw-alias-label-secondary)}
 .s2a_statusOk{color:var(--dsw-alias-state-success-primary)}
@@ -170,7 +171,6 @@ interface ImageToolModelRef {
 }
 
 interface ImageToolsState {
-  analyze: ImageToolModelRef
   generate: ImageToolModelRef
 }
 
@@ -179,7 +179,6 @@ interface ConfigState {
   catalogFormat?: 'structured-v1'
   providers: Record<string, { keyConfigured: boolean; models: Array<CatalogModel | string> }>
   tools?: {
-    analyze?: ImageToolModelRef
     generate?: ImageToolModelRef
   }
 }
@@ -344,7 +343,7 @@ function emptyToolRef(): ImageToolModelRef {
 }
 
 function emptyTools(): ImageToolsState {
-  return { analyze: emptyToolRef(), generate: emptyToolRef() }
+  return { generate: emptyToolRef() }
 }
 
 function toolRefFromConfig(value: ImageToolModelRef | undefined): ImageToolModelRef {
@@ -382,6 +381,21 @@ function serializeToolRef(ref: ImageToolModelRef): ImageToolModelRef | undefined
 }
 
 export function Sub2ApiSettings() {
+  const sectionRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const section = sectionRef.current
+    if (!section) return
+    // DSH's settings scroller has bottom padding; extend the opaque footer
+    // through that inset so scrolling rows cannot peek out underneath it.
+    let scroller = section.parentElement
+    while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement
+    if (!scroller) return
+    const update = () => section.style.setProperty('--s2a-footer-inset', getComputedStyle(scroller).paddingBottom)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(scroller)
+    return () => observer.disconnect()
+  }, [])
   const [baseURL, setBaseURL] = useState('')
   const [providers, setProviders] = useState<Record<string, ProviderState>>({})
   const [tools, setTools] = useState<ImageToolsState>(emptyTools())
@@ -414,7 +428,6 @@ export function Sub2ApiSettings() {
         }
         setProviders(map)
         setTools({
-          analyze: toolRefFromConfig(cfg.tools?.analyze),
           generate: toolRefFromConfig(cfg.tools?.generate),
         })
         try {
@@ -491,7 +504,7 @@ export function Sub2ApiSettings() {
       const payload = {
         baseURL,
         providers: {} as Record<string, { apiKey: string; models: CatalogModel[] }>,
-        tools: {} as { analyze?: ImageToolModelRef; generate?: ImageToolModelRef },
+        tools: {} as { generate?: ImageToolModelRef },
       }
       for (const def of PROVIDERS) {
         const provider = providers[def.key] ?? emptyProvider()
@@ -533,9 +546,7 @@ export function Sub2ApiSettings() {
         })
         payload.providers[def.key] = { apiKey: provider.key, models }
       }
-      const analyze = serializeToolRef(tools.analyze)
       const generate = serializeToolRef(tools.generate)
-      if (analyze !== undefined) payload.tools.analyze = analyze
       if (generate !== undefined) payload.tools.generate = generate
       const res = await api<{ ok: boolean; routes?: string[] }>(`${BASE}/config`, { method: 'POST', body: JSON.stringify(payload) })
       const routes = res.routes !== undefined && res.routes.length > 0 ? res.routes.join(', ') : '无（未填 key）'
@@ -601,7 +612,7 @@ export function Sub2ApiSettings() {
   }
 
   return (
-    <div className="s2a_section">
+    <div className="s2a_section" ref={sectionRef}>
       <h2 className="s2a_title">Sub2API 模型接入</h2>
       <p className="s2a_intro">
         统一端点 + 多 key：所有供应商共享一个 baseURL，每个 key 在 sub2api 后台绑定一个分组，分组决定平台（OpenAI / Claude / Grok）与可用模型。
@@ -616,16 +627,16 @@ export function Sub2ApiSettings() {
       <div className="s2a_rowCard">
         <div className="s2a_rowHead">
           <div className="s2a_rowIdentity">
-            <span className="s2a_rowName">全局图像工具</span>
-            <span className="s2a_rowTag">analyze_image / generate_image</span>
+            <span className="s2a_rowName">图片生成工具</span>
+            <span className="s2a_rowTag">generate_image</span>
           </div>
         </div>
         <div className="s2a_editor">
           <p className="s2a_intro">
-            给当前会话模型补两个全局工具：识图走 vision 模型，生图走 image 模型。未配置时工具仍会出现，但调用会提示先在这里指定模型。
+            指定生成图片使用的模型，生成结果会保存到工作区。
           </p>
-          {(['analyze', 'generate'] as const).map((kind) => {
-            const label = kind === 'analyze' ? '识图模型' : '生图模型'
+          {(['generate'] as const).map((kind) => {
+            const label = '生图模型'
             const ref = tools[kind]
             const options = toolOptions(providers)
             const selected = ref.provider.length > 0 && ref.model.length > 0 ? `${ref.provider}:${ref.model}` : ''

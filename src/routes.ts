@@ -94,7 +94,6 @@ function readProviderConfig(config: Config): ConfigPayload {
     catalogFormat: 'structured-v1',
     providers,
     tools: {
-      ...(config.tools?.analyze !== undefined ? { analyze: { ...config.tools.analyze } } : {}),
       ...(config.tools?.generate !== undefined ? { generate: { ...config.tools.generate } } : {}),
     },
   }
@@ -173,11 +172,9 @@ function readToolModelRef(value: unknown): ImageToolModelRef | undefined {
 function readImageTools(value: unknown, fallback: ImageToolsConfig | undefined): ImageToolsConfig | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return fallback
   const raw = value as Record<string, unknown>
-  const analyze = readToolModelRef(raw.analyze)
   const generate = readToolModelRef(raw.generate)
-  if (analyze === undefined && generate === undefined) return undefined
+  if (generate === undefined) return undefined
   return {
-    ...(analyze !== undefined ? { analyze } : {}),
     ...(generate !== undefined ? { generate } : {}),
   }
 }

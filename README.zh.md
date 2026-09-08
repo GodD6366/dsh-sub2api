@@ -15,7 +15,6 @@ sub2api 是一个把订阅配额转成 OpenAI 兼容 API 的网关。它的模�
 - **推理等级（思考模式）**：对话模型选择器可直接调整 `reasoning_effort`（透传网关）；设置页「思考强度」字段按 [models.dev](https://models.dev/) 的 `reasoning_options` 逐模型填充真实档位（如 `gpt-5.6-sol` 为 none/low/medium/high/xhigh/max，`deepseek-v4-flash` 为 low/high/max），设置页可编辑展示；可在 settings.yaml 中用 `reasoningEfforts: []` 显式关闭。
 - **用量查询**：「查看用量」调用 `GET {baseURL}/v1/usage`，汇总配额、余额、限流窗口与订阅周期用量。
 - **标准配置**：baseURL 与模型目录存于 `llm-sub2api:` 设置节（`$DSH_HOME/settings.yaml`，web 模型页可直接写入）；key 走 harness 凭据存储。
-- **全局识图 / 生图工具**：即使当前会话模型不支持图片，也可以调用 `analyze_image` 和 `generate_image`。它们走设置页指定的识图 / 生图模型：`analyze_image` 返回文字描述；`generate_image` 写入当前工作区并返回文件路径，同时把生成图保存为附件、在工具结果中返回 image 内容块，**聊天记录里直接内联渲染图片**（插件自带附件字节路由 + 工具卡片内嵌预览组件）；附件服务不可用时自动退回纯文本结果。
 - **供应商图标**来自 [lobehub/lobe-icons](https://lobehub.com/icons)，以 SVG 内嵌在设置页中。
 
 ## 安装
@@ -49,9 +48,6 @@ llm-sub2api:
     grok:
       apiKeyEnv: SUB2API_GROK_API_KEY
   tools:
-    analyze:
-      provider: openai
-      model: gpt-5.6-luna
     generate:
       provider: openai
       model: gpt-image-1
@@ -86,13 +82,14 @@ llm-sub2api:
 
 ### 与 dsh-llm-pi-ai 的关系
 
-本插件不再自己实现 LLM 协议层：三个 `sub2api-*` 路由由 `dsh-llm-pi-ai`（dsh-base 内置、dormant 挂载）通过 `llm-pi-ai:` settings profiles 承载。插件在每次 `llm-sub2api:` 配置变化（及启动）时把裸主机 baseURL、各组模型与 key 引用翻译成 hand-declared profiles 写入 `llm-pi-ai:`，路由即时注册 / 撤销。设置页、模型发现（`GET /v1/models`）、用量查询（`GET /v1/usage`）、识图 / 生图工具仍由本插件提供。
+本插件不再自己实现 LLM 协议层：三个 `sub2api-*` 路由由 `dsh-llm-pi-ai`（dsh-base 内置、dormant 挂载）通过 `llm-pi-ai:` settings profiles 承载。插件在每次 `llm-sub2api:` 配置变化（及启动）时把裸主机 baseURL、各组模型与 key 引用翻译成 hand-declared profiles 写入 `llm-pi-ai:`，路由即时注册 / 撤销。设置页、模型发现（`GET /v1/models`）、用量查询（`GET /v1/usage`）、生图工具仍由本插件提供。
 
 > **依赖说明（pi-ai 多轮守卫）**：pi-ai 的 `AssistantMessage.usage` 在类型上是必填字段，前缀 token 估算会解引用它。harness 路径本身已安全——dsh 自带的 `dsh-llm-pi-ai` 会给重建的 assistant 消息挂零 `Usage`。本插件启动时仍会给 dsh 安装目录的 `@earendil-works/pi-ai/dist/utils/estimate.js` 打防御性守卫（`assistant.usage !== undefined` 才计入前缀 token），保护其它不挂 `usage` 的调用方。补丁幂等，升级 dsh 后自动重打；只读安装失败时可手动执行 `node scripts/patch-pi-ai.mjs`。
 
 ### 图片输入 / 思考强度
 
-在模型详情中选择「图片输入」，并选择自动、不支持或手动输入思考档位（逗号分隔，例如 `none, low, high, max`）。补全数据只填空白值，保留手动设置。自动识图镜像与 Gemini 供应商已移除；全局 `analyze_image` / `generate_image` 工具保留。
+模型详情支持手动选择图片输入和填写思考档位（逗号分隔）。补全数据保留手动设置。独立识图工具及其模型选择项已移除；生图模型仍可配置。
+
 
 会话中直接给模型挂图，需要模型声明 `image` 输入模态（否则 harness 在发送前拒绝，提示"当前模型不支持图片"）。**这两个字段可以在模型详情里手动设置**；models.dev 仅用于补全未填写的值：
 
@@ -101,7 +98,6 @@ llm-sub2api:
 
 挂图后请求按分组原生协议携带图片：openai → Responses `input_image`，claude → Messages `image`（base64），grok → chat/completions `image_url`。
 
-在 **设置 → Sub2API 模型 → 全局图像工具** 指定识图 / 生图模型。这两个工具是全局的：纯文本会话模型也可以调用 `analyze_image`（本地文件或 URL）和 `generate_image`（写入当前工作区）。生图先走 `POST {baseURL}/v1/images/generations`，网关没有该端点时再回退到 chat completions。
 
 ## 开发
 

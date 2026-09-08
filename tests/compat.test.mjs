@@ -97,11 +97,16 @@ test('settings save manual capabilities, preserve edits during metadata fill, an
   const React = await import('react')
   const require = createRequire(import.meta.url)
   let plugin, saved
+  const footerStyles = {}
+  const scroller = {overflowY: 'auto', paddingBottom: '24px'}
+  let observerDisconnected = false
   const timers = new Map()
   let timerId = 0
   const fixture = {baseURL: 'https://gateway.test', catalogFormat: 'structured-v1', providers: {openai: {keyConfigured: true, models: [{id: 'test-model', input: ['text'], reasoningEfforts: ['low']}]}}}
   vm.runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), {
     window: {__ModuleLoader__: {load({factory}) { plugin = factory(require) }}, setTimeout(callback) { timers.set(++timerId, callback); return timerId }, clearTimeout(id) {timers.delete(id)}},
+    getComputedStyle: element => element,
+    ResizeObserver: class { observe() {} disconnect() {observerDisconnected = true} },
     fetch: async (url, init) => ({ok: true, json: async () => {
       if (url.includes('models.dev')) return {openai: {models: {'test-model': {attachment: true, reasoning: true}}}}
       if (init?.method === 'POST') {saved = JSON.parse(init.body); return {ok: true, routes: ['sub2api-openai']}}
@@ -111,8 +116,9 @@ test('settings save manual capabilities, preserve edits during metadata fill, an
   const entries = []
   plugin.apply({slots: {inject(_name, callback) {callback()}, register(options, component) {entries.push({options, component})}}})
   let view
-  await act(async () => { view = create(React.createElement(entries[0].component)) })
+  await act(async () => { view = create(React.createElement(entries[0].component), {createNodeMock: () => ({parentElement: scroller, style: {setProperty(key, value) {footerStyles[key] = value}}})}) })
   try {
+    assert.equal(footerStyles['--s2a-footer-inset'], '24px')
     assert.equal(view.root.findAllByProps({className: 's2a_rowTag'}).some(n => n.children.includes('sub2api-gemini')), false)
     await act(async () => {view.root.findAllByProps({className: 's2a_iconBtn s2a_expandBtn'})[0].props.onClick()})
     const field = label => view.root.findByProps({'aria-label': `OpenAI test-model ${label}`})
@@ -123,6 +129,8 @@ test('settings save manual capabilities, preserve edits during metadata fill, an
     assert.deepEqual(saved.providers.openai.models[0].input, ['text', 'image'])
     assert.deepEqual(saved.providers.openai.models[0].reasoningEfforts, ['none', 'high', 'max'])
     assert.deepEqual(Object.keys(saved.providers), ['openai', 'claude', 'grok'])
+    assert.equal('analyze' in saved.tools, false)
+    assert.equal(view.root.findAllByProps({'aria-label': '识图模型'}).length, 0)
     await act(async () => {field('思考强度档位').props.onChange({target: {value: 'invalid'}})})
     await act(async () => {await button('保存配置').props.onClick()})
     assert.ok(view.root.findByProps({role: 'status'}))
@@ -135,4 +143,13 @@ test('settings save manual capabilities, preserve edits during metadata fill, an
     await act(async () => {for (const callback of timers.values()) callback()})
     assert.equal(view.root.findAllByProps({role: 'status'}).length, 0)
   } finally {await act(async () => view.unmount())}
+  assert.equal(observerDisconnected, true)
+})
+
+test('only the image-generation tool and prompt are registered', async () => {
+  const { registerImageTools } = await import('../src/image-tools.ts')
+  const tools = [], prompts = []
+  registerImageTools({inject(_deps, callback) {callback({tools: {register(tool) {tools.push(tool)}}, systemPrompt: {section(prompt) {prompts.push(prompt)}}})}}, {})
+  assert.deepEqual(tools.map(tool => tool.name), ['generate_image'])
+  assert.deepEqual(prompts.map(prompt => prompt.name), ['tool:generate_image'])
 })

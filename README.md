@@ -8,13 +8,14 @@ Sub2API is an AI API gateway that turns subscription quota into OpenAI-compatibl
 
 ## Features
 
+- **Image generation**: select a generation model in settings. `generate_image` saves images to the workspace and returns an inline attachment. The separate image-analysis tool and its model selector have been removed.
+
 - **One base URL, three provider routes**: `sub2api-openai`, `sub2api-claude`, `sub2api-grok` — each configured with its own key and at least one model, registered as a live LLM provider as soon as both are set.
 - **Streaming chat (backed by pi-ai)**: SSE streaming, tool calls, reasoning deltas, and token usage are mapped to the harness protocol by `dsh-llm-pi-ai`, which natively handles wire-format details like top-level `function_call` items in the Responses API.
 - **Model discovery**: one-click "fetch models" calls `GET {baseURL}/v1/models` with the key, so each route's catalog matches exactly what the sub2api group serves.
 - **Reasoning effort (thinking mode)**: `reasoning_effort` is passed straight through to the gateway and adjustable right in the chat model selector; the settings page's per-model "reasoning strength" field fills each model's real levels from [models.dev](https://models.dev/) `reasoning_options` (e.g. `gpt-5.6-sol` → none/low/medium/high/xhigh/max, `deepseek-v4-flash` → low/high/max), editable in the settings page; `reasoningEfforts: []` opts a model out.
 - **Usage lookup**: "view usage" calls `GET {baseURL}/v1/usage` and summarizes quota, balance, rate limits, and subscription windows.
 - **Standards-based config**: base URL and model catalogs live in the `llm-sub2api:` settings section (`$DSH_HOME/settings.yaml`, written by the web Models page); keys go through the harness credential store.
-- **Global vision / image tools**: `analyze_image` and `generate_image` stay available even when the current chat model cannot see or create images. They call a dedicated vision or image model configured on the settings page: `analyze_image` returns a description, while `generate_image` writes into the session workspace and returns a workspace path plus an inline image attachment (text-only fallback when the attachment service is unavailable).
 - **Provider icons** from [lobehub/lobe-icons](https://lobehub.com/icons), embedded as SVG in the settings page.
 
 ## Install
@@ -48,9 +49,6 @@ llm-sub2api:
     grok:
       apiKeyEnv: SUB2API_GROK_API_KEY
   tools:
-    analyze:
-      provider: openai
-      model: gpt-5.6-luna
     generate:
       provider: openai
       model: gpt-image-1
@@ -85,7 +83,7 @@ llm-sub2api:
 
 ### Relationship to dsh-llm-pi-ai
 
-This plugin no longer implements the LLM protocol layer itself: the three `sub2api-*` routes are served by `dsh-llm-pi-ai` (shipped dormant with dsh-base) through `llm-pi-ai:` settings profiles. On every `llm-sub2api:` change (and at boot) the plugin translates the bare-host base URL, per-group models, and key references into hand-declared profiles and writes them to `llm-pi-ai:`, so routes register/drop live. The settings page, model discovery (`GET /v1/models`), usage lookup (`GET /v1/usage`), the vision/image tools remain this plugin's own.
+This plugin no longer implements the LLM protocol layer itself: the three `sub2api-*` routes are served by `dsh-llm-pi-ai` (shipped dormant with dsh-base) through `llm-pi-ai:` settings profiles. On every `llm-sub2api:` change (and at boot) the plugin translates the bare-host base URL, per-group models, and key references into hand-declared profiles and writes them to `llm-pi-ai:`, so routes register/drop live. The settings page, model discovery (`GET /v1/models`), usage lookup (`GET /v1/usage`), the image-generation tool remain this plugin's own.
 
 > **Dependency note (pi-ai multi-turn guard)**: pi-ai's `AssistantMessage.usage` is required in its types and its prefix-token estimation dereferences it. The harness path is already safe: `dsh-llm-pi-ai` attaches a zero `Usage` to every reconstructed assistant message. This plugin still applies a defensive guard at boot (`assistant.usage !== undefined` before counting prefix tokens) to `@earendil-works/pi-ai/dist/utils/estimate.js` inside the dsh install, protecting other callers that build pi-ai contexts without `usage`. The patch is idempotent and is re-applied automatically after a dsh upgrade; on a read-only install run `node scripts/patch-pi-ai.mjs` manually.
 >
@@ -99,7 +97,6 @@ Attaching an image to the session model requires that model to declare the `imag
 
 When the model accepts images, the request carries the image in the group's native protocol: openai → Responses `input_image`, claude → Messages `image` (base64), grok → chat-completions `image_url`.
 
-Pick the dedicated vision / image models under **Settings → Sub2API 模型 → 全局图像工具**. Those two tools stay global: a text-only chat model can still call `analyze_image` (local file or URL) and `generate_image` (writes into the session workspace). Generation first tries `POST {baseURL}/v1/images/generations`, then falls back to chat completions when the gateway has no images endpoint.
 
 ## Development
 

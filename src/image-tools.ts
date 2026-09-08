@@ -1,9 +1,8 @@
 /**
- * Global vision and image-generation tools.
+ * Global image-generation tool.
  *
  * These call a configured Sub2API model independently of the current chat
- * route, so a text-only session can still inspect or create images. Results
- * stay text-only: a description, or the workspace path of a generated file.
+ * route, so a text-only session can still create images. Results include a workspace path and an image attachment.
  *
  * @module dsh-sub2api/image-tools
  */
@@ -48,7 +47,6 @@ function getFs(ctx: Context): ImageFs | undefined {
   return (ctx as Context & { get(name: 'fs'): ImageFs | undefined }).get('fs')
 }
 
-export const ANALYZE_IMAGE_NAME = 'analyze_image'
 export const GENERATE_IMAGE_NAME = 'generate_image'
 export const DEFAULT_IMAGE_TOOL_TIMEOUT_MS = 180_000
 export const DEFAULT_MAX_IMAGE_BYTES: number = 20 * 1024 * 1024
@@ -128,14 +126,6 @@ function extensionForMediaType(mediaType: ImageMediaType): string {
   }
 }
 
-function toBase64(data: Uint8Array): string {
-  return Buffer.from(data).toString('base64')
-}
-
-function dataUrl(mediaType: ImageMediaType, data: Uint8Array): string {
-  return `data:${mediaType};base64,${toBase64(data)}`
-}
-
 function decodeDataUrl(value: string): { mediaType: ImageMediaType; data: Uint8Array } | undefined {
   const match = /^data:(image\/(?:png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=\s]+)$/i.exec(value.trim())
   if (match === null) return undefined
@@ -148,9 +138,9 @@ function sessionCwd(exec: { agent?: { session: { header: { cwd?: string } } } })
   return exec.agent?.session.header.cwd
 }
 
-function resolveToolModel(config: Config, kind: 'analyze' | 'generate'): ResolvedToolModel {
+function resolveToolModel(config: Config, kind: 'generate'): ResolvedToolModel {
   const ref = config.tools?.[kind]
-  const label = kind === 'analyze' ? '识图' : '生图'
+  const label = '生图'
   const provider = typeof ref?.provider === 'string' ? ref.provider.trim() : ''
   const model = typeof ref?.model === 'string' ? ref.model.trim() : ''
   if (provider.length === 0 || model.length === 0) {
@@ -288,223 +278,13 @@ async function collectChatText(response: Response): Promise<string> {
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('text/event-stream')) {
     const text = (await collectSseText(response)).trim()
-    if (text.length === 0) throw new Error('sub2api: vision model returned no text')
+    if (text.length === 0) throw new Error('sub2api: image model returned no text')
     return text
   }
   const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> }
   const text = flattenMessageContent(payload.choices?.[0]?.message?.content).trim()
-  if (text.length === 0) throw new Error('sub2api: vision model returned no text')
+  if (text.length === 0) throw new Error('sub2api: image model returned no text')
   return text
-}
-
-interface ResponsesTextEvent {
-  type?: string
-  delta?: unknown
-  response?: { output?: Array<{ content?: Array<{ text?: string }> }> }
-}
-
-function responsesTextOf(payload: ResponsesTextEvent): string {
-  return (payload.response?.output ?? [])
-    .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
-    .map((part) => typeof part.text === 'string' ? part.text : '')
-    .join('')
-}
-
-/** Collect the assistant text from a Responses-API reply (streamed or JSON). */
-async function collectResponsesText(response: Response): Promise<string> {
-  const contentType = response.headers.get('content-type') ?? ''
-  if (!contentType.includes('text/event-stream')) {
-    const payload = await response.json() as ResponsesTextEvent
-    return responsesTextOf(payload).trim()
-  }
-  if (response.body === null) throw new Error('sub2api: API returned no response body')
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let text = ''
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      while (true) {
-        const idx = buffer.indexOf('\n\n')
-        if (idx === -1) break
-        const raw = buffer.slice(0, idx)
-        buffer = buffer.slice(idx + 2)
-        for (const line of raw.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart())) {
-          if (line.length === 0) continue
-          let event: ResponsesTextEvent
-          try {
-            event = JSON.parse(line) as ResponsesTextEvent
-          } catch {
-            continue
-          }
-          if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
-            text += event.delta
-          } else if (event.type === 'response.completed') {
-            const full = responsesTextOf(event).trim()
-            if (full.length > 0) return full
-          }
-        }
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock()
-    } catch {
-      // lock already released
-    }
-  }
-  return text.trim()
-}
-
-interface MessagesTextEvent {
-  type?: string
-  delta?: { type?: string; text?: unknown }
-}
-
-/** Collect the assistant text from an Anthropic Messages-API reply (streamed or JSON). */
-async function collectMessagesText(response: Response): Promise<string> {
-  const contentType = response.headers.get('content-type') ?? ''
-  if (!contentType.includes('text/event-stream')) {
-    const payload = await response.json() as { content?: Array<{ text?: string }> }
-    return (Array.isArray(payload.content) ? payload.content : [])
-      .map((part) => typeof part.text === 'string' ? part.text : '')
-      .join('')
-      .trim()
-  }
-  if (response.body === null) throw new Error('sub2api: API returned no response body')
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let text = ''
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      while (true) {
-        const idx = buffer.indexOf('\n\n')
-        if (idx === -1) break
-        const raw = buffer.slice(0, idx)
-        buffer = buffer.slice(idx + 2)
-        for (const line of raw.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart())) {
-          if (line.length === 0) continue
-          let event: MessagesTextEvent
-          try {
-            event = JSON.parse(line) as MessagesTextEvent
-          } catch {
-            continue
-          }
-          if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') {
-            text += event.delta.text
-          } else if (event.type === 'message_stop') {
-            return text.trim()
-          }
-        }
-      }
-    }
-  } finally {
-    try {
-      reader.releaseLock()
-    } catch {
-      // lock already released
-    }
-  }
-  return text.trim()
-}
-
-/** Collect the vision model's reply text for the provider's wire protocol. */
-async function collectVisionText(response: Response, api: ApiProtocol): Promise<string> {
-  const text = api === 'openai-responses'
-    ? await collectResponsesText(response)
-    : api === 'anthropic-messages'
-      ? await collectMessagesText(response)
-      : await collectChatText(response)
-  const trimmed = text.trim()
-  if (trimmed.length === 0) throw new Error('sub2api: vision model returned no text')
-  return trimmed
-}
-
-/**
- * One-shot vision Q&A against the configured `analyze` model, using its
- * native wire protocol through the gateway.
- */
-export async function describeViaVisionModel(
-  host: ImageToolHost,
-  question: string,
-  mediaType: ImageMediaType,
-  data: Uint8Array,
-  signal: AbortSignal | undefined,
-): Promise<{ text: string; model: string }> {
-  const resolved = resolveToolModel(host.config(), 'analyze')
-  const response = await gatewayFetch(
-    host,
-    resolved,
-    visionPath(resolved.api),
-    visionBody(resolved, question, mediaType, data),
-    signal,
-    'text/event-stream',
-  )
-  const text = await collectVisionText(response, resolved.api)
-  return { text, model: `${resolved.route}/${resolved.model}` }
-}
-
-/**
- * The gateway endpoint for a vision request, matching the provider group's
- * native wire protocol (responses / messages / chat-completions). Sending the
- * image through the group's native protocol avoids the gateway's
- * chat/completions ↔ native conversion dropping the image payload.
- */
-function visionPath(api: ApiProtocol): string {
-  if (api === 'openai-responses') return '/responses'
-  if (api === 'anthropic-messages') return '/messages'
-  return '/chat/completions'
-}
-
-/** The vision request body for the provider's wire protocol. */
-function visionBody(resolved: ResolvedToolModel, question: string, mediaType: ImageMediaType, data: Uint8Array): Record<string, unknown> {
-  if (resolved.api === 'openai-responses') {
-    return {
-      model: resolved.model,
-      input: [{
-        role: 'user',
-        content: [
-          { type: 'input_text', text: question },
-          { type: 'input_image', image_url: dataUrl(mediaType, data) },
-        ],
-      }],
-      stream: true,
-      stream_options: { include_usage: true },
-    }
-  }
-  if (resolved.api === 'anthropic-messages') {
-    return {
-      model: resolved.model,
-      max_tokens: resolved.maxTokens,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'text', text: question },
-          { type: 'image', source: { type: 'base64', media_type: mediaType, data: toBase64(data) } },
-        ],
-      }],
-      stream: true,
-    }
-  }
-  return {
-    model: resolved.model,
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'text', text: question },
-        { type: 'image_url', image_url: { url: dataUrl(mediaType, data) } },
-      ],
-    }],
-    stream: true,
-    stream_options: { include_usage: true },
-  }
 }
 
 async function loadRemoteImage(url: string, signal: AbortSignal | undefined, maxBytes: number): Promise<{ mediaType: ImageMediaType; data: Uint8Array }> {
@@ -525,26 +305,6 @@ async function loadRemoteImage(url: string, signal: AbortSignal | undefined, max
     ? headerType
     : mediaTypeFromBytes(buffer)
   return { mediaType, data: buffer }
-}
-
-async function readLocalImage(
-  ctx: Context,
-  exec: { signal: AbortSignal; agent?: { session: { header: { cwd?: string } } } },
-  filePath: string,
-  maxBytes: number,
-): Promise<{ path: string; mediaType: ImageMediaType; data: Uint8Array }> {
-  const fs = getFs(ctx)
-  if (fs === undefined) throw new Error(`cannot read "${filePath}": filesystem service is not mounted`)
-  if (mediaTypeForPath(filePath) === undefined) {
-    throw new Error(`cannot read "${filePath}": analyze_image only accepts PNG/JPEG/WebP/GIF paths`)
-  }
-  const cwd = sessionCwd(exec)
-  const target = await fs.resolve(filePath, { ...(cwd !== undefined ? { cwd } : {}), signal: exec.signal })
-  const info = await fs.stat(target, exec.signal)
-  if (info === undefined) throw new Error(`cannot read "${target.displayPath}": not found`)
-  if (info.type !== 'file') throw new Error(`cannot read "${target.displayPath}": not a regular file`)
-  const data = await fs.readBytes(target, exec.signal, maxBytes)
-  return { path: target.displayPath, mediaType: mediaTypeFromBytes(data), data }
 }
 
 function extractGeneratedImage(payload: unknown): { data?: Uint8Array; mediaType?: ImageMediaType; url?: string; revisedPrompt?: string } | undefined {
@@ -671,83 +431,10 @@ async function generateViaChat(
 export function registerImageTools(ctx: Context, host: ImageToolHost): void {
   ctx.inject(['tools', 'systemPrompt'], (toolCtx) => {
     toolCtx.systemPrompt.section({
-      name: 'tool:analyze_image',
-      order: 118,
-      text: 'Use the analyze_image tool to inspect a local image file or image URL with the configured vision model. Call it whenever the current chat model cannot see images, or when you need a dedicated vision model. Do not assume you can see an attached or on-disk image yourself.',
-    })
-    toolCtx.systemPrompt.section({
       name: 'tool:generate_image',
       order: 119,
       text: 'Use the generate_image tool to create an image with the configured image model and write it to the workspace. Call it when the current chat model cannot generate images. The tool returns the saved file path, not the image bytes.',
     })
-
-    toolCtx.tools.register(defineTool({
-      name: ANALYZE_IMAGE_NAME,
-      description: 'Describe or answer questions about a local image file or image URL by calling the configured vision model. Use this when the current chat model cannot see images.',
-      parameters: {
-        file_path: {
-          type: 'string',
-          description: 'Path to a PNG/JPEG/WebP/GIF file. Provide this or image_url.',
-        },
-        image_url: {
-          type: 'string',
-          description: 'http(s) or data: URL of an image. Used when file_path is omitted.',
-        },
-        question: {
-          type: 'string',
-          description: 'What to look for. Defaults to a thorough visual description.',
-        },
-      },
-      output: {
-        schema: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            source: { type: 'string', required: true },
-            model: { type: 'string', required: true },
-            text: { type: 'string', required: true },
-          },
-        },
-        render: (_args, value) => [{ type: 'text', text: value.text }],
-      },
-      timeoutMs: DEFAULT_IMAGE_TOOL_TIMEOUT_MS,
-      isConcurrencySafe: () => true,
-      async execute(args, exec) {
-        const filePath = args.file_path?.trim() ?? ''
-        const imageUrl = args.image_url?.trim() ?? ''
-        if (filePath.length === 0 && imageUrl.length === 0) {
-          throw new Error('analyze_image requires file_path or image_url')
-        }
-        const question = args.question?.trim().length ? args.question.trim() : 'Describe this image thoroughly: subject, scene, text, layout, colors, and any notable details.'
-        const resolved = resolveToolModel(host.config(), 'analyze')
-        const maxBytes = ctx.get('attachments')?.imageLimits.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES
-        let source: string
-        let mediaType: ImageMediaType
-        let data: Uint8Array
-        if (filePath.length > 0) {
-          const local = await readLocalImage(ctx, exec, filePath, maxBytes)
-          source = local.path
-          mediaType = local.mediaType
-          data = local.data
-        } else {
-          const remote = await loadRemoteImage(imageUrl, exec.signal, maxBytes)
-          source = imageUrl.startsWith('data:') ? 'data-url' : imageUrl
-          mediaType = remote.mediaType
-          data = remote.data
-        }
-        const response = await gatewayFetch(host, resolved, visionPath(resolved.api), visionBody(resolved, question, mediaType, data), exec.signal, 'text/event-stream')
-        const text = await collectVisionText(response, resolved.api)
-        return { source, model: `${resolved.route}/${resolved.model}`, text }
-      },
-      presentCall(args) {
-        return {
-          card: 'generic',
-          title: `Analyze image ${args.file_path ?? args.image_url ?? ''}`,
-          kind: 'read',
-          ...(args.file_path !== undefined ? { locations: [{ path: args.file_path }] } : {}),
-        }
-      },
-    }))
 
     toolCtx.tools.register(defineTool({
       name: GENERATE_IMAGE_NAME,

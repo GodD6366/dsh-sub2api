@@ -15,7 +15,7 @@
  * This plugin contributes the sub2api-specific surface on top: the
  * `llm-sub2api:` settings section and its web page (baseURL + per-key model
  * catalogs + keys), gateway model discovery and usage probes, the global
- * vision / image-generation tools, and a bridge
+ * image-generation tools, and a bridge
  * that materializes the configured groups as `llm-pi-ai:` provider profiles
  * the moment the section lands (see `./pi-ai.ts`).
  *
@@ -41,7 +41,6 @@ import { registerImageTools } from './image-tools.ts'
 import { syncPiAiProfiles } from './pi-ai.ts'
 import { applyPiAiMultiTurnPatch } from './pi-ai-patch.ts'
 
-export { describeViaVisionModel } from './image-tools.ts'
 export {
   PI_AI_NS,
   ROUTE_PREFIX,
@@ -143,8 +142,6 @@ export interface ImageToolModelRef {
 }
 
 export interface ImageToolsConfig {
-  /** Vision model used by the global `analyze_image` tool. */
-  analyze?: ImageToolModelRef
   /** Image-generation model used by the global `generate_image` tool. */
   generate?: ImageToolModelRef
 }
@@ -154,7 +151,7 @@ export interface Config {
   baseURL: string
   /** Per-platform provider profiles keyed by sub2api platform name. */
   providers: Record<ProviderKey, ProviderProfile>
-  /** Dedicated models for the global vision / image-generation tools. */
+  /** Dedicated models for the global image-generation tools. */
   tools?: ImageToolsConfig
 }
 
@@ -204,7 +201,6 @@ export const Config: z<Config> = z.object({
     grok: providerProfile,
   }),
   tools: z.object({
-    analyze: imageToolModelRef,
     generate: imageToolModelRef,
   }),
 })
