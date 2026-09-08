@@ -1,7 +1,7 @@
 {
   "name": "@godd6366/dsh-sub2api",
-  "description": "Connect your sub2api gateway to DeepSeek Harness: OpenAI-compatible multi-provider routes (OpenAI / Claude / Grok / Gemini) behind one base URL, with per-key model discovery, usage lookup, global vision/image tools, and a settings page.",
-  "version": "0.1.5",
+  "description": "Connect your sub2api gateway to DeepSeek Harness: OpenAI-compatible multi-provider routes (OpenAI / Claude / Grok) behind one base URL, with per-key model discovery, usage lookup, global vision/image tools, and a settings page.",
+  "version": "0.2.0",
   "license": "MIT",
   "keywords": [
     "dsh-plugin",
@@ -11,7 +11,6 @@
     "openai",
     "claude",
     "grok",
-    "gemini",
     "vision",
     "image-generation"
   ],
@@ -145,6 +144,7 @@
     "@types/node": "^22.20.0",
     "@types/react": "~18.3.1",
     "react": "^18.2.0",
+    "react-test-renderer": "18.3.1",
     "tsdown": "^0.4.0",
     "typescript": "^5.7.0"
   }

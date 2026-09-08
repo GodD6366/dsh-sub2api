@@ -85,7 +85,6 @@ const PROVIDER_LABELS: Record<ProviderKey, string> = {
   openai: 'OpenAI',
   claude: 'Claude',
   grok: 'Grok',
-  gemini: 'Gemini',
 }
 
 interface ResolvedToolModel {
@@ -101,7 +100,7 @@ interface ResolvedToolModel {
 }
 
 function isProviderKey(value: string): value is ProviderKey {
-  return value === 'openai' || value === 'claude' || value === 'grok' || value === 'gemini'
+  return value === 'openai' || value === 'claude' || value === 'grok'
 }
 
 function mediaTypeForPath(filePath: string): ImageMediaType | undefined {
@@ -158,7 +157,7 @@ function resolveToolModel(config: Config, kind: 'analyze' | 'generate'): Resolve
     throw new Error(`sub2api: 未配置${label}模型。打开设置 → Sub2API 模型，为「全局图像工具」指定一个模型后再试`)
   }
   if (!isProviderKey(provider)) {
-    throw new Error(`sub2api: ${label}模型的平台 "${provider}" 无效，应为 openai / claude / grok / gemini`)
+    throw new Error(`sub2api: ${label}模型的平台 "${provider}" 无效，应为 openai / claude / grok`)
   }
   const baseURL = config.baseURL.trim().replace(/\/+$/, '')
   if (baseURL.length === 0) throw new Error('sub2api: baseURL is not configured')
@@ -429,10 +428,8 @@ async function collectVisionText(response: Response, api: ApiProtocol): Promise<
 }
 
 /**
- * One-shot vision Q&A against the configured `analyze` model. Shared by the
- * analyze_image tool and the Auto Vision chat wrapper, so an image turn in a
- * text-only session describes its attachment through the exact same pipeline
- * (native wire protocol → gateway → configured vision model).
+ * One-shot vision Q&A against the configured `analyze` model, using its
+ * native wire protocol through the gateway.
  */
 export async function describeViaVisionModel(
   host: ImageToolHost,

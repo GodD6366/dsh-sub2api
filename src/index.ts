@@ -3,11 +3,11 @@
  *
  * One OpenAI-compatible base URL, many provider routes. In the sub2api
  * gateway each API key is bound to a group, and the group decides the
- * platform (openai / anthropic / gemini / grok) and the model list the key
+ * platform (openai / anthropic / grok) and the model list the key
  * can serve.
  *
  * The LLM routes this plugin used to own (`sub2api-openai` / `sub2api-claude`
- * / `sub2api-grok` / `sub2api-gemini`) are served by the harness's own pi-ai
+ * / `sub2api-grok`) are served by the harness's own pi-ai
  * adapter (`dsh-llm-pi-ai`, mounted dormant by dsh-base): protocol
  * serialization, streaming, usage mapping, replay, and retry handling all live
  * in pi-ai, which speaks each platform's native wire protocol upstream (OpenAI
@@ -15,7 +15,7 @@
  * This plugin contributes the sub2api-specific surface on top: the
  * `llm-sub2api:` settings section and its web page (baseURL + per-key model
  * catalogs + keys), gateway model discovery and usage probes, the global
- * vision / image-generation tools, the Auto-Vision twin routes, and a bridge
+ * vision / image-generation tools, and a bridge
  * that materializes the configured groups as `llm-pi-ai:` provider profiles
  * the moment the section lands (see `./pi-ai.ts`).
  *
@@ -30,7 +30,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-llm'
 import {
-  LlmAdapter,
   LlmError,
   assertUsableApiKey,
 } from '@deepseek-ai/dsh-llm'
@@ -39,20 +38,9 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { registerRoutes } from './routes.ts'
 import { registerImageTools } from './image-tools.ts'
-import { Sub2ApiVisionAdapter, visionRouteOf, VISION_ROUTE_SUFFIX } from './vision-wrapper.ts'
 import { syncPiAiProfiles } from './pi-ai.ts'
 import { applyPiAiMultiTurnPatch } from './pi-ai-patch.ts'
 
-export {
-  Sub2ApiVisionAdapter,
-  VisionMemory,
-  VISION_ROUTE_SUFFIX,
-  VISION_MODEL_SUFFIX,
-  visionRouteOf,
-  baseRouteOf,
-  stripVisionModel,
-  neutralizeReplayState,
-} from './vision-wrapper.ts'
 export { describeViaVisionModel } from './image-tools.ts'
 export {
   PI_AI_NS,
@@ -88,7 +76,7 @@ export const REASONING_EFFORTS: readonly { id: string; name: string }[] = [
   { id: 'high', name: 'High' },
 ]
 
-export type ProviderKey = 'openai' | 'claude' | 'grok' | 'gemini'
+export type ProviderKey = 'openai' | 'claude' | 'grok'
 
 export interface ProviderDef {
   key: ProviderKey
@@ -102,7 +90,6 @@ export const PROVIDERS: readonly ProviderDef[] = [
   { key: 'openai', route: 'sub2api-openai', label: 'OpenAI', icon: 'openai' },
   { key: 'claude', route: 'sub2api-claude', label: 'Claude', icon: 'claude' },
   { key: 'grok', route: 'sub2api-grok', label: 'Grok', icon: 'grok' },
-  { key: 'gemini', route: 'sub2api-gemini', label: 'Gemini', icon: 'gemini' },
 ]
 
 export interface CatalogModel {
@@ -138,7 +125,7 @@ export interface ProviderProfile {
   /**
    * Wire protocol spoken to the gateway for this platform group. Absent
    * selects the group's native protocol (openai → responses, claude →
-   * messages, grok/gemini → chat/completions). Explicitly name a protocol to
+   * messages, grok → chat/completions). Explicitly name a protocol to
    * force a different endpoint, e.g. a gateway that serves a group through
    * chat/completions after all.
    */
@@ -149,7 +136,7 @@ export interface ProviderProfile {
 
 /** One dedicated model used by a global image tool, independent of the chat route. */
 export interface ImageToolModelRef {
-  /** Sub2API platform that owns the key and catalog (`openai` / `claude` / `grok` / `gemini`). */
+  /** Sub2API platform that owns the key and catalog (`openai` / `claude` / `grok`). */
   provider: string
   /** Model id sent to the gateway. */
   model: string
@@ -169,14 +156,6 @@ export interface Config {
   providers: Record<ProviderKey, ProviderProfile>
   /** Dedicated models for the global vision / image-generation tools. */
   tools?: ImageToolsConfig
-  /**
-   * Auto Vision twin routes: an image-capable copy of every registered
-   * provider route (`<route>-vision`, shown as "… + 自动识图"). Picking one
-   * lets a text-only model accept pasted images — the twin's wrapper rewrites
-   * image blocks into vision-model transcriptions before the text turn is
-   * delegated. Defaults to on; set false to hide the twins.
-   */
-  autoVision?: boolean
 }
 
 const catalogModel = z.object({
@@ -223,13 +202,11 @@ export const Config: z<Config> = z.object({
     openai: providerProfile,
     claude: providerProfile,
     grok: providerProfile,
-    gemini: providerProfile,
   }),
   tools: z.object({
     analyze: imageToolModelRef,
     generate: imageToolModelRef,
   }),
-  autoVision: z.boolean().default(true),
 })
 
 /**
@@ -244,7 +221,7 @@ export const API_PROTOCOLS: readonly ApiProtocol[] = ['openai-completions', 'ope
 /**
  * The wire protocol each sub2api platform group speaks natively at the
  * gateway. Openai groups are served upstream through the Responses API and
- * Claude groups through the Messages API; grok/gemini groups are
+ * Claude groups through the Messages API; grok groups are
  * chat-completions. Speaking the native protocol avoids the gateway's
  * chat/completions ↔ native conversion, which drops/misaligns tool-call
  * names and ids for parallel calls. A provider profile may override.
@@ -253,7 +230,6 @@ const DEFAULT_PROTOCOL: Record<ProviderKey, ApiProtocol> = {
   openai: 'openai-responses',
   claude: 'anthropic-messages',
   grok: 'openai-completions',
-  gemini: 'openai-completions',
 }
 
 /** Resolve the wire protocol for one provider key; shared by chat routes and the global image tools. */
@@ -284,10 +260,6 @@ export function gatewayAnthropicRoot(baseURL: string): string {
   return gatewayApiRoot(baseURL).replace(/\/v1$/i, '')
 }
 
-function providerDef(route: string) {
-  return PROVIDERS.find((p) => p.route === route)
-}
-
 function resolveAdapterOptions(config: Config) {
   const baseURL = (config.baseURL ?? '').trim().replace(/\/+$/, '')
   // An empty baseURL means "not configured yet": boot dormant and let the
@@ -303,7 +275,7 @@ const EMPTY_PROVIDER: ProviderProfile = {}
 
 /** Provider map used until settings (or setConfig) provide real values. */
 function defaultProviders(): Record<ProviderKey, ProviderProfile> {
-  return { openai: EMPTY_PROVIDER, claude: EMPTY_PROVIDER, grok: EMPTY_PROVIDER, gemini: EMPTY_PROVIDER }
+  return { openai: EMPTY_PROVIDER, claude: EMPTY_PROVIDER, grok: EMPTY_PROVIDER }
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -317,7 +289,6 @@ export function apply(ctx: Context, config: Config): void {
       baseURL: raw.baseURL ?? '',
       providers: { ...defaultProviders(), ...(raw.providers ?? {}) },
       ...(raw.tools !== undefined ? { tools: raw.tools } : {}),
-      autoVision: raw.autoVision !== false,
     }
   }
   const options = () => {
@@ -363,126 +334,6 @@ export function apply(ctx: Context, config: Config): void {
     })
   }
 
-  // ── Auto Vision twin routes ──────────────────────────────────────────────
-  // Every registered text-only provider route gets an image-capable twin
-  // ("<route>-vision", shown as "… + 自动识图"), covering our own sub2api
-  // routes (now owned by llm-pi-ai) AND external providers (deepseek 官方、
-  // llm-pi-ai、其他插件添加的提供商). The twin's catalog declares
-  // `inputModalities: ['text', 'image']` so the harness admission accepts
-  // pasted images; its stream rewrites image blocks into vision-model
-  // transcriptions (via the configured `tools.analyze` model) and delegates
-  // the text-only turn to the base route's own adapter. Text-only models gain
-  // image capability without changing the model; multimodal models keep their
-  // native image input.
-  //
-  // Base adapters are resolved through the llm runtime's registration (the
-  // same access vision-router uses), so the twin follows whichever adapter
-  // owns the route — for sub2api groups that is the pi-ai adapter.
-  const registrationAccessor = ctx.llm as unknown as {
-    registration(route: string): { adapter: LlmAdapter } | undefined
-  }
-  const visionAdapter = new Sub2ApiVisionAdapter({
-    config: () => current(),
-    resolveApiKey,
-    resolveAttachments: () => ctx.get('attachments'),
-    nameOf: (route) => {
-      const def = providerDef(route)
-      if (def !== undefined) return `Sub2API ${def.label}`
-      const info = ctx.llm.listProviders().find((entry) => entry.id === route)
-      return info?.name ?? route
-    },
-    resolveBase: (route) => {
-      try {
-        const registration = registrationAccessor.registration(route)
-        if (registration === undefined) return undefined
-        const base = registration.adapter
-        return {
-          listModels: () => base.listModels(route),
-          resolveModel: (_provider, model, signal) => base.resolveModel(route, model, signal),
-          providerRetryPolicy: () => ctx.llm.providerRetryPolicy(route),
-          stream: (generateOptions) => base.stream(generateOptions),
-        }
-      } catch {
-        return undefined
-      }
-    },
-  })
-
-  let visionRegistration: { replace(providers: string[]): void } | undefined
-  let visionRoutes: string[] = []
-  const routeOwnedByOther = (route: string): boolean => {
-    if (visionRoutes.includes(route)) return false
-    try {
-      registrationAccessor.registration(route)
-      return true
-    } catch {
-      return false
-    }
-  }
-  const commitVisionRoutes = (routes: string[]) => {
-    // 冲突过滤：镜像名已被其他插件占用（如 vision-router 的
-    // deepseek-official-vision）时跳过，避免 DUPLICATE_ADAPTER。
-    const usable = routes.filter((route) => !routeOwnedByOther(route))
-    const same = usable.length === visionRoutes.length && usable.every((r, i) => r === visionRoutes[i])
-    if (same) return
-    try {
-      if (visionRegistration === undefined) {
-        if (usable.length > 0) visionRegistration = ctx.llm.registerAdapter(usable, visionAdapter)
-      } else {
-        visionRegistration.replace(usable)
-      }
-      visionRoutes = usable
-    } catch (error) {
-      ctx.logger.warn('llm-sub2api: Auto Vision twin registration refused, retrying on the next provider change')
-      ctx.logger.warn(error)
-    }
-  }
-
-  // 外部路由发现：枚举所有已注册路由（含 llm-pi-ai 拥有的 sub2api 路由），
-  // 只包装「存在纯文本模型」的路由，排除任何已包装的 -vision 路由。
-  const textRouteCache = new Map<string, boolean>()
-  const discoverTextRoutes = async (): Promise<string[]> => {
-    const out: string[] = []
-    for (const info of ctx.llm.listProviders()) {
-      const route = info.id
-      if (route.endsWith(VISION_ROUTE_SUFFIX)) continue
-      let hasText = textRouteCache.get(route)
-      if (hasText === undefined) {
-        try {
-          const models = await ctx.llm.listModels(route)
-          hasText = models.some((model) => !(model.inputModalities ?? []).includes('image'))
-        } catch {
-          hasText = false
-        }
-        textRouteCache.set(route, hasText)
-      }
-      if (hasText) out.push(route)
-    }
-    return out
-  }
-
-  let recomputeSeq = 0
-  const recomputeVisionRoutes = async () => {
-    const seq = ++recomputeSeq
-    if (current().autoVision === false) {
-      commitVisionRoutes([])
-      return
-    }
-    let routes: string[] = []
-    try {
-      textRouteCache.clear()
-      routes = (await discoverTextRoutes()).map((route) => visionRouteOf(route))
-    } catch {
-      routes = []
-    }
-    if (seq !== recomputeSeq) return
-    commitVisionRoutes(routes)
-  }
-
-  // 初始发现 + 跟随提供商拓扑变化（其他插件注册/注销路由时自动增删镜像）。
-  void recomputeVisionRoutes()
-  ctx.on('llm/adapters-updated', () => { void recomputeVisionRoutes() })
-
   // Settings-page HTTP bridge: read/write config, discover models, query usage.
   // `listRegisteredRoutes` reports the routes the pi-ai adapter actually
   // registered for this plugin's groups.
@@ -502,11 +353,9 @@ export function apply(ctx: Context, config: Config): void {
           baseURL: next.baseURL ?? '',
           providers: { ...defaultProviders(), ...next.providers },
           ...(next.tools !== undefined ? { tools: next.tools } : {}),
-          autoVision: next.autoVision !== false,
         })
       }
       syncPiAi()
-      void recomputeVisionRoutes()
     },
     listRegisteredRoutes: () => ctx.llm.listProviders()
       .map((info) => info.id)
@@ -526,7 +375,6 @@ export function apply(ctx: Context, config: Config): void {
     onChange: () => {
       try {
         syncPiAi()
-        void recomputeVisionRoutes()
       } catch (error) {
         ctx.logger.error('llm-sub2api: keeping the previous llm-pi-ai profiles after a refused update')
         ctx.logger.error(error)

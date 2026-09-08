@@ -1,7 +1,7 @@
 /**
  * Settings section for dsh-sub2api.
  *
- * One base URL, four provider cards (OpenAI / Claude / Grok / Gemini), each
+ * One base URL, three provider cards (OpenAI / Claude / Grok), each
  * with a key field and a structured model catalog. Keys are written to the
  * harness credential store through the host HTTP bridge; the base URL and
  * model catalogs land in the `llm-sub2api:` settings section.
@@ -58,7 +58,6 @@ const PROVIDERS: ProviderDefinition[] = [
   { key: 'openai', label: 'OpenAI', icon: 'openai', placeholder: 'sk-…', modelsDevProvider: 'openai' },
   { key: 'claude', label: 'Claude', icon: 'claude', placeholder: 'sk-ant-…', modelsDevProvider: 'anthropic' },
   { key: 'grok', label: 'Grok', icon: 'grok', placeholder: 'xai-…', modelsDevProvider: 'xai' },
-  { key: 'gemini', label: 'Gemini', icon: 'gemini', placeholder: 'AIza…', modelsDevProvider: 'google' },
 ]
 
 const CSS_ID = 'dsh-sub2api/settings.css'
@@ -103,14 +102,13 @@ const css = `
 .s2a_expandBtn{width:44px;height:38px;border-radius:7px;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary)}
 .s2a_modelDetails{border-top:1px solid var(--dsw-alias-border-l2);grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px 12px;padding:10px 12px 12px;display:grid}
 .s2a_modelDetails .s2a_fieldLabel{font-size:12px;font-weight:400}
-/* Derived, read-only display for fields auto-filled from models.dev. */
-.s2a_readonly{box-sizing:border-box;width:100%;height:32px;font:inherit;border:1px dashed var(--dsw-alias-border-l3);background:transparent;color:var(--dsw-alias-label-secondary);border-radius:8px;padding:0 10px;font-size:13px;line-height:30px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .s2a_reasoningField{grid-column:1/-1}
 .s2a_modelEmpty{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;color:var(--dsw-alias-label-tertiary);margin:0;padding:16px 10px;text-align:center;font-size:12px;line-height:18px}
 .s2a_modelFooter{align-items:center;justify-content:space-between;gap:8px;display:flex}
 .s2a_modelSource{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
 .s2a_modelSource a{color:inherit;text-decoration:underline;text-underline-offset:2px}
-.s2a_actions{align-items:center;gap:8px;margin-top:4px;display:flex}
+.s2a_actions{position:sticky;bottom:0;z-index:5;align-items:center;justify-content:flex-end;gap:8px;margin-top:4px;padding:12px 0;background:var(--dsw-alias-bg-layer-1,#fff);border-top:1px solid var(--dsw-alias-border-l2,#ddd);display:flex}
+.s2a_toast{position:fixed;top:24px;right:24px;z-index:10000;display:flex;align-items:flex-start;gap:12px;box-sizing:border-box;max-width:min(480px,calc(100vw - 32px));max-height:40vh;overflow:auto;padding:12px 14px;border:1px solid var(--dsw-alias-border-l2,#ddd);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);box-shadow:0 6px 24px #0002}.s2a_toast .s2a_status{overflow-wrap:anywhere;flex:1}.s2a_toast button{flex-shrink:0}
 .s2a_status{margin:0;font-size:12px;line-height:18px;white-space:pre-wrap;color:var(--dsw-alias-label-secondary)}
 .s2a_statusOk{color:var(--dsw-alias-state-success-primary)}
 .s2a_statusErr{color:var(--dsw-alias-state-error-primary)}
@@ -153,7 +151,9 @@ interface ModelRow {
   /** '' = 自动（未设置，按路由默认）; 'on' = 支持（档位见 effortLevels）; 'off' = 不支持 */
   reasoning: string
   /** 该模型实际支持的推理档位（reasoning === 'on' 时保存到配置） */
-  effortLevels: string[]
+  effortLevels: string
+  inputEdited?: boolean
+  reasoningEdited?: boolean
 }
 
 const DEFAULT_REASONING_LEVELS = ['low', 'medium', 'high']
@@ -209,7 +209,7 @@ let modelsDevRequest: Promise<ModelsDevCatalog> | undefined
 function modelRow(model: CatalogModel | string = { id: '' }): ModelRow {
   if (typeof model === 'string') {
     const [id = '', name = '', contextWindow = ''] = model.split('|')
-    return { rowId: nextRowId++, id: id.trim(), name: name.trim(), contextWindow: contextWindow.trim(), maxTokens: '', input: '', reasoning: '', effortLevels: [] }
+    return { rowId: nextRowId++, id: id.trim(), name: name.trim(), contextWindow: contextWindow.trim(), maxTokens: '', input: '', reasoning: '', effortLevels: '' }
   }
   const reasoningEfforts = model.reasoningEfforts
   return {
@@ -218,9 +218,9 @@ function modelRow(model: CatalogModel | string = { id: '' }): ModelRow {
     name: model.name ?? '',
     contextWindow: model.contextWindow !== undefined ? String(model.contextWindow) : '',
     maxTokens: model.maxTokens !== undefined ? String(model.maxTokens) : '',
-    input: model.input === undefined ? '' : model.input.includes('image') ? 'text-image' : 'text',
+    input: model.input === undefined || model.input.length === 0 ? '' : model.input.includes('image') ? 'text-image' : 'text',
     reasoning: reasoningEfforts === undefined ? '' : reasoningEfforts.length === 0 ? 'off' : 'on',
-    effortLevels: reasoningEfforts !== undefined && reasoningEfforts.length > 0 ? [...reasoningEfforts] : [],
+    effortLevels: reasoningEfforts !== undefined && reasoningEfforts.length > 0 ? reasoningEfforts.join(', ') : '',
   }
 }
 
@@ -299,23 +299,23 @@ function applyOfficialDefaults(rows: ModelRow[], def: ProviderDefinition, catalo
       ? String(officialOutput)
       : row.maxTokens
     // 图片输入：models.dev 有数据就自动定，用户不用选
-    const input = row.input.length === 0 && officialInput(official) !== undefined ? officialInput(official)! : row.input
+    const input = !row.inputEdited && row.input.length === 0 && officialInput(official) !== undefined ? officialInput(official)! : row.input
     const officialEfforts = officialEffortValues(official)
     let reasoning = row.reasoning
     let effortLevels = row.effortLevels
-    if (reasoning.length === 0) {
+    if (!row.reasoningEdited && reasoning.length === 0) {
       if (officialEfforts !== undefined && officialEfforts.length > 0) {
         reasoning = 'on'
-        effortLevels = officialEfforts
+        effortLevels = officialEfforts.join(', ')
       } else if (typeof official.reasoning === 'boolean') {
         reasoning = official.reasoning ? 'on' : 'off'
-        effortLevels = official.reasoning ? [...DEFAULT_REASONING_LEVELS] : []
+        effortLevels = official.reasoning ? DEFAULT_REASONING_LEVELS.join(', ') : ''
       }
     }
     if (
       name !== row.name || contextWindow !== row.contextWindow || maxTokens !== row.maxTokens
       || input !== row.input
-      || reasoning !== row.reasoning || effortLevels.join(',') !== row.effortLevels.join(',')
+      || reasoning !== row.reasoning || effortLevels !== row.effortLevels
     ) filled++
     return { ...row, name, contextWindow, maxTokens, input, reasoning, effortLevels }
   })
@@ -349,8 +349,8 @@ function emptyTools(): ImageToolsState {
 
 function toolRefFromConfig(value: ImageToolModelRef | undefined): ImageToolModelRef {
   return {
-    provider: value?.provider ?? '',
-    model: value?.model ?? '',
+    provider: PROVIDERS.some(def => def.key === value?.provider) ? value!.provider : '',
+    model: PROVIDERS.some(def => def.key === value?.provider) ? value!.model : '',
   }
 }
 
@@ -390,6 +390,12 @@ export function Sub2ApiSettings() {
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!message && !error) return
+    const timer = window.setTimeout(() => { setMessage(''); setError('') }, error ? 10000 : 6000)
+    return () => window.clearTimeout(timer)
+  }, [message, error])
 
   useEffect(() => {
     ensureCss()
@@ -433,8 +439,10 @@ export function Sub2ApiSettings() {
   }, [])
 
   const updateModel = (providerKey: string, rowId: number, patch: Partial<ModelRow>) => {
-    const provider = providers[providerKey] ?? emptyProvider()
-    updateProvider(providerKey, { models: provider.models.map((row) => row.rowId === rowId ? { ...row, ...patch } : row) })
+    setProviders(previous => {
+      const provider = previous[providerKey] ?? emptyProvider()
+      return { ...previous, [providerKey]: { ...provider, models: provider.models.map(row => row.rowId === rowId ? { ...row, ...patch } : row) } }
+    })
   }
 
   const toggleModel = (rowId: number) => {
@@ -464,10 +472,11 @@ export function Sub2ApiSettings() {
     setBusy(`metadata-${def.key}`); setError(''); setMessage('')
     try {
       const catalog = await loadModelsDev()
-      const provider = providers[def.key] ?? emptyProvider()
-      const result = applyOfficialDefaults(provider.models, def, catalog)
-      updateProvider(def.key, { models: result.rows })
-      setMessage(result.filled > 0 ? `${def.label} 已从 models.dev 补全 ${result.filled} 个模型` : `${def.label} 没有需要补全的模型`)
+      setProviders(previous => {
+        const provider = previous[def.key] ?? emptyProvider()
+        return { ...previous, [def.key]: { ...provider, models: applyOfficialDefaults(provider.models, def, catalog).rows } }
+      })
+      setMessage(`${def.label} 已补全空白字段，保留手动设置`)
     } catch (e) {
       setError(`无法读取 models.dev：${String(e instanceof Error ? e.message : e)}`)
     } finally {
@@ -504,8 +513,10 @@ export function Sub2ApiSettings() {
             throw new Error(`${def.label} ${id} 的 Max Tokens 必须是正整数`)
           }
           const reasoningEfforts = row.reasoning === 'off' ? [] : row.reasoning === 'on'
-            ? (row.effortLevels.length > 0 ? row.effortLevels : [...DEFAULT_REASONING_LEVELS])
+            ? [...new Set(row.effortLevels.split(/[,，/\s]+/).filter(Boolean))]
             : undefined
+          if (row.reasoning === 'on' && !reasoningEfforts?.length) throw new Error(`${def.label} ${id} 请填写至少一个思考强度`)
+          if (reasoningEfforts?.some(level => !['none', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].includes(level))) throw new Error(`${def.label} ${id} 思考强度支持 none、off、minimal、low、medium、high、xhigh、max`)
           const input: Array<'text' | 'image'> | undefined = row.input === 'text-image'
             ? ['text', 'image']
             : row.input === 'text'
@@ -593,8 +604,7 @@ export function Sub2ApiSettings() {
     <div className="s2a_section">
       <h2 className="s2a_title">Sub2API 模型接入</h2>
       <p className="s2a_intro">
-        统一端点 + 多 key：所有供应商共享一个 baseURL，每个 key 在 sub2api 后台绑定一个分组，分组决定平台（OpenAI / Claude / Grok /
-        Gemini）与可用模型。
+        统一端点 + 多 key：所有供应商共享一个 baseURL，每个 key 在 sub2api 后台绑定一个分组，分组决定平台（OpenAI / Claude / Grok）与可用模型。
       </p>
       <p className="s2a_notice">
         提示：先在 sub2api 后台创建各平台的分组并生成 API key，再填入下方。
@@ -761,20 +771,26 @@ export function Sub2ApiSettings() {
                                   />
                                 </div>
                                 <div className="s2a_field">
-                                  <label className="s2a_fieldLabel">图片输入（自动补全）</label>
-                                  <div className="s2a_readonly">
-                                    {row.input === 'text-image' ? '文本 + 图片' : row.input === 'text' ? '仅文本' : '自动（按模型推断）'}
-                                  </div>
+                                  <label className="s2a_fieldLabel">图片输入</label>
+                                  <select className="s2a_input" aria-label={`${def.label} ${row.id} 图片输入`} value={row.input}
+                                    onChange={event => updateModel(def.key, row.rowId, { input: event.target.value, inputEdited: true })}>
+                                    <option value="">自动（按模型推断）</option>
+                                    <option value="text">仅文本</option>
+                                    <option value="text-image">文本 + 图片</option>
+                                  </select>
                                 </div>
                                 <div className="s2a_field s2a_reasoningField">
-                                  <label className="s2a_fieldLabel">思考强度（自动补全）</label>
-                                  <div className="s2a_readonly">
-                                    {row.reasoning === 'on'
-                                      ? (row.effortLevels.length > 0 ? row.effortLevels.join(' / ') : '支持')
-                                      : row.reasoning === 'off'
-                                        ? '不支持'
-                                        : '自动（low / medium / high）'}
-                                  </div>
+                                  <label className="s2a_fieldLabel">思考强度</label>
+                                  <select className="s2a_input" aria-label={`${def.label} ${row.id} 思考模式`} value={row.reasoning}
+                                    onChange={event => updateModel(def.key, row.rowId, { reasoning: event.target.value, reasoningEdited: true })}>
+                                    <option value="">自动</option>
+                                    <option value="off">不支持</option>
+                                    <option value="on">手动输入档位</option>
+                                  </select>
+                                  {row.reasoning === 'on' && <input className="s2a_input" value={row.effortLevels}
+                                    aria-label={`${def.label} ${row.id} 思考强度档位`} placeholder="例如 none, low, high, max"
+                                    onChange={event => updateModel(def.key, row.rowId, { effortLevels: event.target.value, reasoningEdited: true })} />}
+                                  <span className="s2a_modelSource">多个档位用逗号分隔。手动设置不会被补全数据覆盖。</span>
                                 </div>
                               </div>
                             )}
@@ -809,8 +825,10 @@ export function Sub2ApiSettings() {
           {busy === 'status' ? '…' : '查看状态'}
         </button>
       </div>
-      {message.length > 0 && <p className="s2a_status s2a_statusOk" style={{ marginTop: 6 }}>{message}</p>}
-      {error.length > 0 && <p className="s2a_status s2a_statusErr" style={{ marginTop: 6 }}>{error}</p>}
+      {(message || error) && <div className="s2a_toast" role="status" aria-live="polite">
+        <p className={`s2a_status ${error ? 's2a_statusErr' : 's2a_statusOk'}`}>{error || message}</p>
+        <button className="s2a_iconBtn" aria-label="关闭提示" onClick={() => { setMessage(''); setError('') }}>×</button>
+      </div>}
     </div>
   )
 }

@@ -6,11 +6,11 @@ import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 import SettingsProvider from '@deepseek-ai/dsh-settings'
 import { Config as PiConfig } from '@deepseek-ai/dsh-llm-pi-ai'
-import { Config, translateToPiAi, syncPiAiProfiles, Sub2ApiVisionAdapter } from '../lib/index.js'
+import { Config, translateToPiAi, syncPiAiProfiles } from '../lib/index.js'
 
 const config = () => Config({
   baseURL: 'https://gateway.test/v1',
-  providers: Object.fromEntries(['openai', 'claude', 'grok', 'gemini'].map(key => [key, {
+  providers: Object.fromEntries(['openai', 'claude', 'grok'].map(key => [key, {
     apiKeyEnv: `TEST_${key.toUpperCase()}`,
     models: [{ id: `${key}-test`, reasoningEfforts: ['none', 'high', 'max'] }],
   }])),
@@ -18,12 +18,12 @@ const config = () => Config({
 
 test('all gateway routes satisfy the current pi-ai schema', () => {
   const { providers } = PiConfig({ providers: translateToPiAi(config()) })
-  assert.equal(Object.keys(providers).length, 4)
+  assert.equal(Object.keys(providers).length, 3)
   assert.equal(providers['sub2api-claude'].baseURL, 'https://gateway.test')
   assert.equal(providers['sub2api-claude'].api, 'anthropic-messages')
   assert.equal(providers['sub2api-openai'].baseURL, 'https://gateway.test/v1')
   assert.equal(providers['sub2api-openai'].api, 'openai-responses')
-  assert.equal(providers['sub2api-gemini'].api, 'openai-completions')
+  assert.equal(providers['sub2api-grok'].api, 'openai-completions')
   assert.deepEqual(providers['sub2api-openai'].models[0].reasoningEfforts, {off: 'none', high: 'high', max: 'max'})
 })
 
@@ -51,9 +51,9 @@ test('new settings service installs, hot-updates and removes bridged profiles', 
   try {
     await consumer.await()
     await sync
-    assert.equal(Object.keys(ctx.settings.get('llm-pi-ai').providers).length, 4)
+    assert.equal(Object.keys(ctx.settings.get('llm-pi-ai').providers).length, 3)
     const unrelated = {api: 'openai-completions', baseURL: 'https://other.test/v1', models: [{id: 'other'}]}
-    await ctx.settings.update('llm-pi-ai', {providers: {external: unrelated}})
+    await ctx.settings.update('llm-pi-ai', {providers: {external: unrelated, 'sub2api-gemini': unrelated}})
     await ctx.settings.update('llm-sub2api', {baseURL: ''})
     await new Promise(resolve => setImmediate(resolve))
     await sync
@@ -66,27 +66,6 @@ test('new settings service installs, hot-updates and removes bridged profiles', 
     await consumer.dispose()
     await service.dispose()
   }
-})
-
-test('vision twins preserve text forwarding and strip provider-native replay', async () => {
-  let forwarded
-  const adapter = new Sub2ApiVisionAdapter({
-    config,
-    resolveApiKey: async () => 'test',
-    resolveAttachments: () => undefined,
-    nameOf: route => route,
-    resolveBase: () => ({
-      listModels: async () => [{id: 'text-model', inputModalities: ['text']}, {id: 'native', inputModalities: ['text', 'image']}],
-      async *stream(options) { forwarded = options; yield {type: 'text-delta', text: 'ok'} },
-    }),
-  })
-  assert.deepEqual((await adapter.listModels('base-vision')).map(m => m.id), ['text-model-vision'])
-  const message = {role: 'assistant', content: [{type: 'text', text: 'history'}], source: {kind: 'model', provider: 'base-vision', model: 'text-model-vision', replayState: {opaque: true}}}
-  for await (const chunk of adapter.stream({provider: 'base-vision', model: 'text-model-vision', messages: [message]})) assert.equal(chunk.text, 'ok')
-  assert.equal(forwarded.provider, 'base')
-  assert.equal(forwarded.model, 'text-model')
-  assert.equal(forwarded.messages[0].source.replayState, undefined)
-  assert.ok(message.source.replayState)
 })
 
 test('browser bundle registers settings and renders running/settled image tools', () => {
@@ -106,4 +85,54 @@ test('browser bundle registers settings and renders running/settled image tools'
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-renderer'))
   assert.ok(!manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime'))
+})
+
+test('legacy Gemini and auto-vision settings do not create routes', () => {
+  const legacy = Config({...config(), autoVision: true, providers: {...config().providers, gemini: {apiKeyEnv: 'OLD', models: [{id: 'old'}]}}})
+  assert.deepEqual(Object.keys(translateToPiAi(legacy)), ['sub2api-openai', 'sub2api-claude', 'sub2api-grok'])
+})
+
+test('settings save manual capabilities, preserve edits during metadata fill, and dismiss errors', async () => {
+  const { create, act } = await import('react-test-renderer')
+  const React = await import('react')
+  const require = createRequire(import.meta.url)
+  let plugin, saved
+  const timers = new Map()
+  let timerId = 0
+  const fixture = {baseURL: 'https://gateway.test', catalogFormat: 'structured-v1', providers: {openai: {keyConfigured: true, models: [{id: 'test-model', input: ['text'], reasoningEfforts: ['low']}]}}}
+  vm.runInNewContext(readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8'), {
+    window: {__ModuleLoader__: {load({factory}) { plugin = factory(require) }}, setTimeout(callback) { timers.set(++timerId, callback); return timerId }, clearTimeout(id) {timers.delete(id)}},
+    fetch: async (url, init) => ({ok: true, json: async () => {
+      if (url.includes('models.dev')) return {openai: {models: {'test-model': {attachment: true, reasoning: true}}}}
+      if (init?.method === 'POST') {saved = JSON.parse(init.body); return {ok: true, routes: ['sub2api-openai']}}
+      return fixture
+    }}), btoa,
+  })
+  const entries = []
+  plugin.apply({slots: {inject(_name, callback) {callback()}, register(options, component) {entries.push({options, component})}}})
+  let view
+  await act(async () => { view = create(React.createElement(entries[0].component)) })
+  try {
+    assert.equal(view.root.findAllByProps({className: 's2a_rowTag'}).some(n => n.children.includes('sub2api-gemini')), false)
+    await act(async () => {view.root.findAllByProps({className: 's2a_iconBtn s2a_expandBtn'})[0].props.onClick()})
+    const field = label => view.root.findByProps({'aria-label': `OpenAI test-model ${label}`})
+    await act(async () => {field('图片输入').props.onChange({target: {value: 'text-image'}}); field('思考强度档位').props.onChange({target: {value: 'none, high, max'}})})
+    const button = text => view.root.findAllByType('button').find(n => n.children.includes(text))
+    await act(async () => {await button('补全数据').props.onClick()})
+    await act(async () => {await button('保存配置').props.onClick()})
+    assert.deepEqual(saved.providers.openai.models[0].input, ['text', 'image'])
+    assert.deepEqual(saved.providers.openai.models[0].reasoningEfforts, ['none', 'high', 'max'])
+    assert.deepEqual(Object.keys(saved.providers), ['openai', 'claude', 'grok'])
+    await act(async () => {field('思考强度档位').props.onChange({target: {value: 'invalid'}})})
+    await act(async () => {await button('保存配置').props.onClick()})
+    assert.ok(view.root.findByProps({role: 'status'}))
+    assert.match(view.root.findByProps({className: 's2a_status s2a_statusErr'}).children.join(''), /思考强度支持/)
+    await act(async () => {view.root.findByProps({'aria-label': '关闭提示'}).props.onClick()})
+    assert.equal(view.root.findAllByProps({role: 'status'}).length, 0)
+    await act(async () => {field('思考模式').props.onChange({target: {value: 'off'}})})
+    await act(async () => {await button('保存配置').props.onClick()})
+    assert.deepEqual(saved.providers.openai.models[0].reasoningEfforts, [])
+    await act(async () => {for (const callback of timers.values()) callback()})
+    assert.equal(view.root.findAllByProps({role: 'status'}).length, 0)
+  } finally {await act(async () => view.unmount())}
 })

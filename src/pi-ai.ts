@@ -2,7 +2,7 @@
  * dsh-sub2api → dsh-llm-pi-ai profile bridge.
  *
  * The LLM routes this plugin used to own (`sub2api-openai` / `sub2api-claude`
- * / `sub2api-grok` / `sub2api-gemini`) are now served by the harness's pi-ai
+ * / `sub2api-grok`) are now served by the harness's pi-ai
  * adapter (`dsh-llm-pi-ai`, mounted dormant by dsh-base): protocol
  * serialization, streaming, usage mapping, replay, and retry handling all live
  * in pi-ai. This module is the translation layer — it turns this plugin's
@@ -13,7 +13,7 @@
  *
  * Every sub2api group is translated as a *hand-declared* route — pi-ai ships
  * no provider under these keys — with `api` naming the group's native wire
- * protocol (openai→responses, claude→messages, grok/gemini→chat-completions),
+ * protocol (openai→responses, claude→messages, grok→chat-completions),
  * `baseURL` set to the shared gateway, and `models` carrying the configured
  * catalog with each model's capacity, modalities, and reasoning levels mapped
  * onto pi-ai's vocabulary (`none` becomes `off` with wire spelling `none`).

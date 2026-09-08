@@ -207,7 +207,7 @@ async function resolveProbeKey(
   typedKey: string,
 ): Promise<string> {
   if (typedKey.length > 0) return typedKey
-  if (!isProviderKey(provider)) throw new Error('provider 无效，应为 openai / claude / grok / gemini')
+  if (!isProviderKey(provider)) throw new Error('provider 无效，应为 openai / claude / grok')
   const def = PROVIDERS.find((entry) => entry.key === provider)
   const profile = routes.config().providers[provider]
   if (profile?.apiKeyEnv === undefined) {
@@ -254,7 +254,6 @@ export function registerRoutes(ctx: Context, routes: RouteContext): void {
             openai: { ...current.providers.openai },
             claude: { ...current.providers.claude },
             grok: { ...current.providers.grok },
-            gemini: { ...current.providers.gemini },
           },
           ...(current.tools !== undefined ? { tools: { ...current.tools } } : {}),
         }
