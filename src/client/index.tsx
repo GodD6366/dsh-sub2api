@@ -4,7 +4,8 @@
  * @module dsh-sub2api/client
  */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { Sub2ApiSettings } from './settings.tsx'
 import { GenerateImageToolview } from './toolview.tsx'
@@ -12,7 +13,7 @@ import { GenerateImageToolview } from './toolview.tsx'
 export const name = 'dsh-sub2api-client'
 export const inject = ['slots']
 
-export function apply(ctx: ClientContext): void {
+export function apply(ctx: Context): void {
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'sub2api-models',

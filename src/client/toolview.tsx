@@ -9,37 +9,17 @@
  * (the request carries the full attachment ref; the store re-verifies the
  * content digest, so only genuine generated images resolve).
  *
- * The `tool.call.toolview` slot is declared by @deepseek-ai/dsh-client-ui-tool;
- * this package does not depend on it at runtime, so the slot is re-declared
- * locally (module augmentation) with the exact owner share the tool UI passes
- * (callId / toolName / block / cwd / openFile / inspect).
+ * The tool UI owns the slot contract; import its public props so upstream
+ * changes are checked at build time.
  *
  * @module dsh-sub2api/client/toolview
  */
 
 import type { CSSProperties } from 'react'
-import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ContentBlock, ImageBlock } from '@deepseek-ai/dsh-llm'
+import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
+import type { ImageBlock } from '@deepseek-ai/dsh-llm'
 
-declare module '@deepseek-ai/dsh-client-ui-slots' {
-  interface SlotMap {
-    'tool.call.toolview': {
-      kind: 'keyed'
-      scope: 'session'
-      owner: {
-        callId: string
-        toolName: string
-        /** Frozen running call or settled result node (the tool-result content blocks). */
-        block: { content?: readonly ContentBlock[] }
-        cwd?: string
-        openFile: (path: string) => void
-        inspect?: () => void
-      }
-    }
-  }
-}
-
-type GenerateImageToolviewProps = PropsRuntime<'tool.call.toolview'>
+type GenerateImageToolviewProps = ToolCallViewProps
 
 const ROOT: CSSProperties = {
   display: 'grid',
@@ -71,9 +51,9 @@ function attachmentUrl(image: ImageBlock): string {
 
 export function GenerateImageToolview(props: GenerateImageToolviewProps): JSX.Element {
   const { block } = props
-  const content = Array.isArray(block?.content) ? block.content : []
+  const content = 'content' in block ? block.content : []
   const image = content.find((b) => b.type === 'image' && b.attachment !== undefined) as ImageBlock | undefined
-  const text = content.find((b) => b.type === 'text' && typeof b.text === 'string')
+  const text = content.find((b) => b.type === 'text')
 
   if (image === undefined && text === undefined) {
     return (

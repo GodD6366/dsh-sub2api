@@ -22,9 +22,9 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
-import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
-import type { ApiProtocol, CatalogModel, Config, ProviderKey, ProviderProfile } from './index.ts'
+import type {} from '@deepseek-ai/dsh-settings'
+import type { PiAiModelProfile, PiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
+import type { CatalogModel, Config, ProviderKey, ProviderProfile } from './index.ts'
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
@@ -35,7 +35,7 @@ import {
 } from './index.ts'
 
 /** The settings namespace owned by dsh-llm-pi-ai. */
-export const PI_AI_NS: SettingsNamespace = settingsNamespace('llm-pi-ai')
+export const PI_AI_NS = 'llm-pi-ai'
 
 /** Route prefix this plugin's groups own in the llm-pi-ai profile dict. */
 export const ROUTE_PREFIX: string = 'sub2api-'
@@ -43,37 +43,8 @@ export const ROUTE_PREFIX: string = 'sub2api-'
 /** pi-ai thinking levels a profile may declare (catalog `THINKING_LEVELS`). */
 const THINKING_LEVELS: readonly string[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
-/** One model entry in an llm-pi-ai profile (pi-ai `PiAiModelProfile`). */
-export interface PiAiModelProfile {
-  id: string
-  name?: string
-  contextWindow?: number
-  maxTokens?: number
-  input?: Array<'text' | 'image'>
-  reasoningEfforts?: false | Partial<Record<string, string | null>>
-}
-
-/** One provider route in an llm-pi-ai profile (pi-ai `PiAiProviderProfile`). */
-export interface PiAiProviderProfile {
-  apiKeyEnv?: string
-  displayName?: string
-  api?: ApiProtocol
-  baseURL?: string
-  models?: PiAiModelProfile[]
-  defaultContextWindow?: number
-  defaultMaxTokens?: number
-  defaultInput?: Array<'text' | 'image'>
-  retryPolicy?: {
-    mode: 'normal' | 'always'
-    maxRetries?: number
-    retryableCodes?: string[]
-    backoff?: {
-      initialDelayMs?: number
-      maxDelayMs?: number
-      jitterRatio?: number
-    }
-  }
-}
+// Use the adapter's public contract so schema changes cannot silently drift.
+export type { PiAiModelProfile, PiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 
 /** The llm-pi-ai settings section value this plugin writes. */
 export interface PiAiSettingsSection {

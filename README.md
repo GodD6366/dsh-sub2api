@@ -8,17 +8,19 @@ Sub2API is an AI API gateway that turns subscription quota into OpenAI-compatibl
 
 ## Features
 
-- **One base URL, four provider routes**: `sub2api-openai`, `sub2api-claude`, `sub2api-grok`, `sub2api-gemini` — each configured with its own key, registered as a live LLM provider the moment the key is set.
+- **One base URL, four provider routes**: `sub2api-openai`, `sub2api-claude`, `sub2api-grok`, `sub2api-gemini` — each configured with its own key and at least one model, registered as a live LLM provider as soon as both are set.
 - **Streaming chat (backed by pi-ai)**: SSE streaming, tool calls, reasoning deltas, and token usage are mapped to the harness protocol by `dsh-llm-pi-ai`, which natively handles wire-format details like top-level `function_call` items in the Responses API.
-- **Model discovery**: one-click "fetch models" calls `GET {baseURL}/models` with the key, so each route's catalog matches exactly what the sub2api group serves.
-- **Reasoning effort (thinking mode)**: `reasoning_effort` is passed straight through to the gateway and adjustable right in the chat model selector; the settings page's per-model "reasoning strength" column fills each model's real levels from [models.dev](https://models.dev/) `reasoning_options` (e.g. `gpt-5.6-sol` → none/low/medium/high/xhigh/max, `deepseek-v4-flash` → low/high/max), with editable levels and an explicit opt-out.
-- **Usage lookup**: "view usage" calls `GET {baseURL}/usage` and summarizes quota, balance, rate limits, and subscription windows.
+- **Model discovery**: one-click "fetch models" calls `GET {baseURL}/v1/models` with the key, so each route's catalog matches exactly what the sub2api group serves.
+- **Reasoning effort (thinking mode)**: `reasoning_effort` is passed straight through to the gateway and adjustable right in the chat model selector; the settings page's per-model "reasoning strength" field fills each model's real levels from [models.dev](https://models.dev/) `reasoning_options` (e.g. `gpt-5.6-sol` → none/low/medium/high/xhigh/max, `deepseek-v4-flash` → low/high/max), shown read-only in the settings page; `reasoningEfforts: []` opts a model out.
+- **Usage lookup**: "view usage" calls `GET {baseURL}/v1/usage` and summarizes quota, balance, rate limits, and subscription windows.
 - **Standards-based config**: base URL and model catalogs live in the `llm-sub2api:` settings section (`$DSH_HOME/settings.yaml`, written by the web Models page); keys go through the harness credential store.
-- **Global vision / image tools**: `analyze_image` and `generate_image` stay available even when the current chat model cannot see or create images. They call a dedicated vision or image model configured on the settings page, and return a description or a workspace file path rather than injecting image blocks into a text-only session.
-- **Auto Vision wrapper**: image capability for text-only models. Every registered text-only provider route gets a same-name twin (`<route>-vision`, shown as "… + 自动识图") — our own `sub2api-*` routes **and external providers** (official `deepseek-official`, `llm-pi-ai`, routes added by other plugins). Twin models carry a **`-vision` id/name suffix** (e.g. `deepseek-v4-flash-vision`) so the picker shows at a glance which models accept images; the suffix is stripped again when the call is delegated back to the base route. The twin's catalog declares `inputModalities: ['text', 'image']` so the harness attachment admission passes, and the twin's stream rewrites image blocks into vision-model transcriptions (via the configured `tools.analyze` model, cached per attachment) before delegating the text-only turn to the original route's adapter. DeepSeek stays the brain; the vision model is only the eyes. Twins follow `llm/adapters-updated` and skip names already taken by other plugins. Disable with `autoVision: false`.
+- **Global vision / image tools**: `analyze_image` and `generate_image` stay available even when the current chat model cannot see or create images. They call a dedicated vision or image model configured on the settings page: `analyze_image` returns a description, while `generate_image` writes into the session workspace and returns a workspace path plus an inline image attachment (text-only fallback when the attachment service is unavailable).
+- **Auto Vision wrapper**: image capability for text-only models. Every registered text-only provider route gets a same-name twin (`<route>-vision`, shown as "… + 自动识图") — our own `sub2api-*` routes **and external providers** (official `deepseek-official`, other `llm-pi-ai:` profiles, routes added by other plugins). Twin models carry a **`-vision` id/name suffix** (e.g. `deepseek-v4-flash-vision`) so the picker shows at a glance which models accept images; the suffix is stripped again when the call is delegated back to the base route. The twin's catalog declares `inputModalities: ['text', 'image']` so the harness attachment admission passes, and the twin's stream rewrites image blocks into vision-model transcriptions (via the configured `tools.analyze` model, cached per attachment) before delegating the text-only turn to the original route's adapter. The base text model stays the brain; the vision model is only the eyes. Twins follow `llm/adapters-updated` and skip names already taken by other plugins. Disable with `autoVision: false`.
 - **Provider icons** from [lobehub/lobe-icons](https://lobehub.com/icons), embedded as SVG in the settings page.
 
 ## Install
+
+Requires DeepSeek Harness **0.1.2-rc.1 or later**; typecheck, build, and compatibility tests also pass against **0.1.3-alpha.2**. This version uses the settings service’s `installSection` API and the `dsh-client-ui-renderer` browser service; `dsh-client-runtime` is no longer required.
 
 ```bash
 dsh plugin --profile web add @godd6366/dsh-sub2api
@@ -41,7 +43,7 @@ llm-sub2api:
     openai:
       apiKeyEnv: SUB2API_OPENAI_API_KEY
       models:
-        - id: gpt-4o
+        - id: gpt-5.6-sol
     claude:
       apiKeyEnv: SUB2API_CLAUDE_API_KEY
     grok:
@@ -51,13 +53,13 @@ llm-sub2api:
   tools:
     analyze:
       provider: openai
-      model: gpt-4o
+      model: gpt-5.6-luna
     generate:
       provider: openai
       model: gpt-image-1
 ```
 
-Store each key through the credentials service (the web Models page writes it, or export `SUB2API_OPENAI_API_KEY=…` etc.). A route activates only when its platform has a key; clear the key to drop the route again.
+Store each key through the credentials service (the web Models page writes it, or export `SUB2API_OPENAI_API_KEY=…` etc.). A route activates only when its platform has a key and at least one model; clear the key (or empty the model list) to drop the route again.
 
 ### Wire protocol (automatic per group)
 
@@ -79,7 +81,7 @@ llm-sub2api:
       apiKeyEnv: SUB2API_OPENAI_API_KEY
       api: openai-completions   # optional: openai-completions / openai-responses / anthropic-messages
       models:
-        - id: gpt-4o
+        - id: gpt-5.6-sol
 ```
 
 `api` accepts `openai-completions` (`/v1/chat/completions`), `openai-responses` (`/v1/responses`), or `anthropic-messages` (`/v1/messages`); omitted means the automatic group default above.
@@ -88,7 +90,7 @@ llm-sub2api:
 
 This plugin no longer implements the LLM protocol layer itself: the four `sub2api-*` routes are served by `dsh-llm-pi-ai` (shipped dormant with dsh-base) through `llm-pi-ai:` settings profiles. On every `llm-sub2api:` change (and at boot) the plugin translates the bare-host base URL, per-group models, and key references into hand-declared profiles and writes them to `llm-pi-ai:`, so routes register/drop live. The settings page, model discovery (`GET /v1/models`), usage lookup (`GET /v1/usage`), the vision/image tools, and the Auto Vision twins remain this plugin's own.
 
-> **Dependency (pi-ai multi-turn crash; attribution: dsh-llm-pi-ai violates pi-ai's contract)**: pi-ai's `AssistantMessage.usage` is a required field that its prefix-token estimation dereferences, but the harness's own `dsh-llm-pi-ai` rebuilds assistant history **without** `usage` (the harness `Message` type records none), so multi-turn conversations throw `Cannot read properties of undefined (reading 'totalTokens')`. The root fix belongs in dsh-llm-pi-ai (attach a zero `Usage`); **this plugin applies a defensive guard at boot** (`assistant.usage !== undefined` before counting prefix tokens) to `@earendil-works/pi-ai/dist/utils/estimate.js` inside the dsh install — idempotent, re-applied automatically after a dsh upgrade, so a fresh install works out of the box; on a read-only install run `node scripts/patch-pi-ai.mjs` manually.
+> **Dependency note (pi-ai multi-turn guard)**: pi-ai's `AssistantMessage.usage` is required in its types and its prefix-token estimation dereferences it. The harness path is already safe: `dsh-llm-pi-ai` attaches a zero `Usage` to every reconstructed assistant message. This plugin still applies a defensive guard at boot (`assistant.usage !== undefined` before counting prefix tokens) to `@earendil-works/pi-ai/dist/utils/estimate.js` inside the dsh install, protecting other callers that build pi-ai contexts without `usage`. The patch is idempotent and is re-applied automatically after a dsh upgrade; on a read-only install run `node scripts/patch-pi-ai.mjs` manually.
 >
 > **Auto Vision twins and replay**: the twin delegates history to the base route with the *base* provider id, so pi-ai stamps its replay state with that provider while the harness records the message under the *twin* route — replaying it would fail pi-ai's `provider does not match assistant source` check (`INVALID_REPLAY_STATE`). The twin therefore strips `replayState` from assistant history before delegating (pi-ai then treats it as foreign); twin conversations intentionally skip provider-native replay.
 
@@ -101,7 +103,7 @@ Attaching an image to the session model requires that model to declare the `imag
 
 When the model accepts images, the request carries the image in the group's native protocol: openai → Responses `input_image`, claude → Messages `image` (base64), grok/gemini → chat-completions `image_url`.
 
-Pick the dedicated vision / image models under **Settings → Sub2API 模型 → 全局图像工具**. Those two tools stay global: a text-only chat model can still call `analyze_image` (local file or URL) and `generate_image` (writes into the session workspace). Generation first tries `POST {baseURL}/images/generations`, then falls back to chat completions when the gateway has no images endpoint.
+Pick the dedicated vision / image models under **Settings → Sub2API 模型 → 全局图像工具**. Those two tools stay global: a text-only chat model can still call `analyze_image` (local file or URL) and `generate_image` (writes into the session workspace). Generation first tries `POST {baseURL}/v1/images/generations`, then falls back to chat completions when the gateway has no images endpoint.
 
 ## Development
 

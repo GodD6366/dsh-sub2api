@@ -34,7 +34,7 @@ import {
   LlmError,
   assertUsableApiKey,
 } from '@deepseek-ai/dsh-llm'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
 import { registerRoutes } from './routes.ts'
@@ -68,7 +68,7 @@ export { applyPiAiMultiTurnPatch, type PiAiPatchResult } from './pi-ai-patch.ts'
 export const name = 'llm-sub2api'
 export const inject: string[] = ['llm', 'settings', 'credentials']
 
-const NS = settingsNamespace('llm-sub2api')
+const NS = 'llm-sub2api'
 
 /** Context capacity assumed for a model neither configuration nor discovery sizes. */
 export const DEFAULT_CONTEXT_WINDOW = 128000
@@ -353,7 +353,7 @@ export function apply(ctx: Context, config: Config): void {
 
   // ── pi-ai profile bridge ────────────────────────────────────────────────
   // The chat routes are owned by dsh-llm-pi-ai: every `llm-sub2api:` change
-  // (and boot, via installSettingsSection's first onChange) materializes the
+  // (and boot, via installSection's first onChange) materializes the
   // configured groups as `llm-pi-ai:` provider profiles. A refused write
   // (unserviceable profile) keeps the previous routes and is logged here.
   const syncPiAi = () => {
@@ -519,7 +519,7 @@ export function apply(ctx: Context, config: Config): void {
     resolveApiKey,
   })
 
-  installSettingsSection(ctx, NS, Config, config, {
+  ctx.settings.installSection(ctx, NS, Config, config, {
     setSource: (source) => {
       current = source
     },
